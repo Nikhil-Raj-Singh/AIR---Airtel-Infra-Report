@@ -1,3 +1,4 @@
+
 # AIR – Airtel Infra‑Health Report
 
 AIR (Airtel Infra‑Health Report) is an internal analytics dashboard designed to
@@ -89,3 +90,47 @@ operations teams.
 
 ```bash
 python app.py
+```
+
+The application auto‑launches Streamlit internally.
+
+***
+
+## 📁 Expected Input
+
+*   Excel (`.xlsx`, `.xls`) or CSV (`.csv`)
+*   Typical columns:
+    *   Site ID
+    *   Cluster
+    *   Battery Backup (Yes/No)
+    *   DG Automation Status
+    *   SNMP Communicated
+    *   RM Count (N+1)
+*   Extra columns are supported and retained for analysis
+
+***
+
+## 🚀 Future Enhancements (Planned)
+
+*   Excel export per tab
+*   Weighted severity scoring
+*   EB / Feeder KPI integration
+*   Auto‑mapping without manual confirmation
+*   Dark / Airtel‑themed UI
+*   Historical comparison (daily / weekly)
+
+***
+
+## 👤 Author Notes
+
+This project was intentionally designed under **restricted corporate laptop
+constraints** to ensure maximum portability and real‑world usability inside
+enterprise environments.
+
+AIR serves as a foundation that can be extended into a full‑fledged Infra
+Health & SLA monitoring platform.
+
+***
+
+---
+
