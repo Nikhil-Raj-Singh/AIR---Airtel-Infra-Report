@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import sys
+import os
+import subprocess
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Network Diagnostic Dashboard", layout="wide", initial_sidebar_state="expanded")
@@ -38,26 +41,35 @@ with st.sidebar:
             st.stop() # Stops the rest of the app from running until data is present
     else:
         # Load the actual uploaded file
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
+        except Exception as e:
+            st.error(f"Error loading file: {e}")
+            st.stop()
 
 # --- 3. SIDEBAR: ENGINE ROOM & KPI CONFIGURATION ---
 with st.sidebar:
     st.markdown("---")
     st.header("⚙️ KPI Engine Room")
     
-    # Standard Hardcoded KPIs
     st.subheader("✅ Standard Critical KPIs")
     check_battery = st.checkbox("Battery Check", value=True)
     check_dg = st.checkbox("DG Automation Check", value=True)
     check_rm = st.checkbox("RM (N+1) Check", value=True)
     
-    # Expanders for Hardcoded Logic
     if check_dg:
         with st.expander("🛠️ DG Logic", expanded=False):
-            dg_fail_states = st.multiselect("SNMP Failure Statuses:", options=df["DG Automation Status (SNMP)"].unique(), default=["Failed", "Not Reachable"] if "Failed" in df["DG Automation Status (SNMP)"].unique() else [])
+            # Check if column exists before trying to use it to prevent KeyError
+            if "DG Automation Status (SNMP)" in df.columns:
+                dg_opts = df["DG Automation Status (SNMP)"].dropna().unique().tolist()
+                default_dg = [x for x in ["Failed", "Not Reachable"] if x in dg_opts]
+                dg_fail_states = st.multiselect("SNMP Failure Statuses:", options=dg_opts, default=default_dg)
+            else:
+                dg_fail_states = []
+                st.warning("Column 'DG Automation Status (SNMP)' missing.")
             session_threshold = st.slider("Min Session %", 0.0, 100.0, 80.0, step=5.0)
 
     if check_battery:
@@ -67,13 +79,16 @@ with st.sidebar:
 
     if check_rm:
         with st.expander("📡 RM Logic", expanded=False):
-            rm_fail_states = st.multiselect("RM Failure Statuses:", options=df["RM Count (N+1)"].unique(), default=["Failed", "Degraded"] if "Failed" in df["RM Count (N+1)"].unique() else [])
+            if "RM Count (N+1)" in df.columns:
+                rm_opts = df["RM Count (N+1)"].dropna().unique().tolist()
+                default_rm = [x for x in ["Failed", "Degraded"] if x in rm_opts]
+                rm_fail_states = st.multiselect("RM Failure Statuses:", options=rm_opts, default=default_rm)
+            else:
+                rm_fail_states = []
+                st.warning("Column 'RM Count (N+1)' missing.")
 
     st.markdown("---")
-
-    # --- NEW: CUSTOM RULE BUILDER ---
     st.subheader("🏗️ Custom Rule Builder")
-    st.caption("Define your own failure condition on any column.")
     use_custom_rule = st.checkbox("Enable Custom Rule", value=False)
     
     if use_custom_rule:
@@ -86,35 +101,31 @@ with st.sidebar:
 df['Is_100_OK'] = True
 df['Failure_Reasons'] = ""
 
-# Condition 1: Hardcoded DG Logic
-if check_dg:
-    is_dg = df["DG/Non-DG ULS"].astype(str).str.upper() == "DG"
-    has_automation = df["DG Automation (Yes/No)"].astype(str).str.upper() == "YES"
-    snmp_failed = df["DG Automation Status (SNMP)"].isin(dg_fail_states)
-    session_failed = df["Automation OK (Session Percentage)"] < session_threshold
-    
-    dg_mask = is_dg & has_automation & (snmp_failed | session_failed)
-    df.loc[dg_mask, 'Is_100_OK'] = False
-    df.loc[dg_mask, 'Failure_Reasons'] += "DG Auto Issue; "
+try:
+    if check_dg and "DG/Non-DG ULS" in df.columns and "DG Automation (Yes/No)" in df.columns and "DG Automation Status (SNMP)" in df.columns and "Automation OK (Session Percentage)" in df.columns:
+        is_dg = df["DG/Non-DG ULS"].astype(str).str.upper() == "DG"
+        has_automation = df["DG Automation (Yes/No)"].astype(str).str.upper() == "YES"
+        snmp_failed = df["DG Automation Status (SNMP)"].isin(dg_fail_states)
+        session_failed = pd.to_numeric(df["Automation OK (Session Percentage)"], errors='coerce').fillna(100) < session_threshold
+        
+        dg_mask = is_dg & has_automation & (snmp_failed | session_failed)
+        df.loc[dg_mask, 'Is_100_OK'] = False
+        df.loc[dg_mask, 'Failure_Reasons'] += "DG Auto Issue; "
 
-# Condition 2: Hardcoded Battery Logic
-if check_battery:
-    hrs_failed = df["Battery Backup (Hrs)"] < battery_min_hrs
-    flag_low_failed = (df["BB Low (Yes/No)"].astype(str).str.upper() == "YES") if check_bb_low_flag else False
-    
-    batt_mask = hrs_failed | flag_low_failed
-    df.loc[batt_mask, 'Is_100_OK'] = False
-    df.loc[batt_mask, 'Failure_Reasons'] += "Battery Issue; "
+    if check_battery and "Battery Backup (Hrs)" in df.columns and "BB Low (Yes/No)" in df.columns:
+        hrs_failed = pd.to_numeric(df["Battery Backup (Hrs)"], errors='coerce').fillna(99) < battery_min_hrs
+        flag_low_failed = (df["BB Low (Yes/No)"].astype(str).str.upper() == "YES") if check_bb_low_flag else False
+        
+        batt_mask = hrs_failed | flag_low_failed
+        df.loc[batt_mask, 'Is_100_OK'] = False
+        df.loc[batt_mask, 'Failure_Reasons'] += "Battery Issue; "
 
-# Condition 3: Hardcoded RM Logic
-if check_rm:
-    rm_mask = df["RM Count (N+1)"].isin(rm_fail_states)
-    df.loc[rm_mask, 'Is_100_OK'] = False
-    df.loc[rm_mask, 'Failure_Reasons'] += "RM (N+1) Failed; "
+    if check_rm and "RM Count (N+1)" in df.columns:
+        rm_mask = df["RM Count (N+1)"].isin(rm_fail_states)
+        df.loc[rm_mask, 'Is_100_OK'] = False
+        df.loc[rm_mask, 'Failure_Reasons'] += "RM (N+1) Failed; "
 
-# Condition 4: CUSTOM RULE LOGIC
-if use_custom_rule and custom_val:
-    try:
+    if use_custom_rule and custom_val:
         if custom_op == "Equals":
             custom_mask = df[custom_col].astype(str).str.strip().str.lower() == custom_val.strip().lower()
         elif custom_op == "Not Equals":
@@ -128,12 +139,12 @@ if use_custom_rule and custom_val:
         
         df.loc[custom_mask, 'Is_100_OK'] = False
         df.loc[custom_mask, 'Failure_Reasons'] += f"Custom Rule ({custom_col}); "
-    except Exception as e:
-        st.sidebar.error(f"⚠️ Custom rule error: Ensure the value matches the data type. ({e})")
 
-# Clean up trailing text
-df['Failure_Reasons'] = df['Failure_Reasons'].str.rstrip('; ')
-df['Failure_Reasons'] = df['Failure_Reasons'].replace("", "None")
+except Exception as e:
+    st.error(f"Error applying logic: {e}")
+
+# Clean up text
+df['Failure_Reasons'] = df['Failure_Reasons'].str.rstrip('; ').replace("", "None")
 
 
 # --- 5. MAIN PAGE: DASHBOARD UI ---
@@ -146,10 +157,12 @@ failed_sites = total_sites - ok_sites
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Active Sites", f"{total_sites:,}")
-col2.metric("✅ 100% OK Sites", f"{ok_sites:,}", f"{(ok_sites/total_sites)*100:.1f}%")
+col2.metric("✅ 100% OK Sites", f"{ok_sites:,}", f"{(ok_sites/total_sites)*100:.1f}%" if total_sites > 0 else "0%")
 col3.metric("🚨 Failed Sites", f"{failed_sites:,}", f"-{failed_sites}", delta_color="inverse")
-critical_battery = df[df["Battery Backup (Hrs)"] < 1.0].shape[0] if "Battery Backup (Hrs)" in df.columns else 0
-col4.metric("⚠️ Critical Battery (< 1Hr)", f"{critical_battery:,}")
+
+if "Battery Backup (Hrs)" in df.columns:
+    critical_battery = df[pd.to_numeric(df["Battery Backup (Hrs)"], errors='coerce') < 1.0].shape[0]
+    col4.metric("⚠️ Critical Battery (< 1Hr)", f"{critical_battery:,}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -180,13 +193,24 @@ st.dataframe(
     hide_index=True
 )
 
-
-# --- 6. SAFER AUTO-RUN MAGIC ---
+# --- 6. BULLETPROOF AUTO-RUN MAGIC ---
 if __name__ == '__main__':
-    import os
-    import sys
-    # This prevents the script from infinitely restarting itself
+    # Prevent infinite loop if already running in Streamlit
     if "streamlit" not in sys.argv[0]:
-        # Uses the native OS command line to trigger streamlit safely
-        os.system(f'"{sys.executable}" -m streamlit run "{__file__}"')
+        print("Initializing Dashboard Engine...")
+        
+        # Safely determine the script path, dodging VS Code Interactive environment errors
+        try:
+            if '__file__' in globals():
+                script_path = os.path.abspath(__file__)
+            else:
+                script_path = os.path.abspath(sys.argv[0])
+            
+            # Use subprocess to safely handle spaces in Windows paths
+            subprocess.run([sys.executable, "-m", "streamlit", "run", script_path])
+        except Exception as e:
+            print(f"\n[CRITICAL ERROR] Auto-launch failed: {e}")
+            print("\nPlease open your VS Code terminal and run this command manually:")
+            print("streamlit run app.py")
+            
         sys.exit()
