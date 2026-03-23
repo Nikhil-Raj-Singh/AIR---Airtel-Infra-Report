@@ -1,9 +1,10 @@
 # ==========================================================
-# app.py — AIR V5: Ultimate Smart BI & KPI Deep Dive Engine
+# app.py — AIR V6: Configurable BI Engine with Dynamic Visuals
 # ==========================================================
 
 import os, sys, subprocess
 import re
+import json
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -28,7 +29,6 @@ st.set_page_config(page_title="AIR Central BI", layout="wide", initial_sidebar_s
 
 st.markdown("""
 <style>
-    /* 3D / Neumorphic Styling for a Futuristic Look */
     .stApp { background-color: #e0e5ec; }
     
     .card-3d {
@@ -40,14 +40,10 @@ st.markdown("""
         text-align: center;
         transition: transform 0.2s;
     }
-    .card-3d:hover { transform: translateY(-3px); }
-    
-    .card-title { color: #5c6b73; font-size: 1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px;}
-    .card-value { font-size: 2.5rem; font-weight: 800; color: #2b2d42; }
-    .val-alert { color: #d90429; text-shadow: 2px 2px 4px rgba(217,4,41,0.2); }
-    .val-success { color: #2a9d8f; text-shadow: 2px 2px 4px rgba(42,157,143,0.2); }
-    
-    /* Clean Matrix Table */
+    .card-title { color: #5c6b73; font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px;}
+    .card-value { font-size: 2.2rem; font-weight: 800; color: #2b2d42; }
+    .val-alert { color: #d90429; }
+    .val-success { color: #2a9d8f; }
     .stDataFrame { border-radius: 10px; box-shadow: 5px 5px 10px rgb(163,177,198,0.4); }
 </style>
 """, unsafe_allow_html=True)
@@ -55,7 +51,6 @@ st.markdown("""
 # ==========================================================
 # SESSION STATE: THE RULE ENGINE
 # ==========================================================
-# We store rules dynamically so the user can build them
 if 'dynamic_rules' not in st.session_state:
     st.session_state.dynamic_rules = []
 
@@ -67,11 +62,9 @@ def load_data(file):
     df = pd.read_csv(file, engine="python") if file.name.endswith(".csv") else pd.read_excel(file)
     df.columns = [re.sub(r"\s+", " ", str(c).replace("\n", " ")).strip() for c in df.columns]
     
-    # Fast string conversion
     for col in df.select_dtypes(include=['object']).columns:
         df[col] = df[col].astype(str)
         
-    # Auto-infer Circle if missing
     site_col = next((c for c in df.columns if "site id" in c.lower()), None)
     if site_col and 'Auto_Circle' not in df.columns:
         df['Auto_Circle'] = np.where(df[site_col].str.upper().str.startswith('B'), 'Bihar',
@@ -106,40 +99,44 @@ def apply_rules(_df, rules):
         
         if r['fail_col'] not in df.columns: continue
         
-        # Pre-condition
         if r['use_pre'] and r['pre_col'] in df.columns:
             pre_mask = evaluate_cond(df[r['pre_col']], r['pre_op'], r['pre_val'])
         else: pre_mask = pd.Series(True, index=df.index)
             
-        # Base Failure
         fail_mask = evaluate_cond(df[r['fail_col']], r['fail_op'], r['fail_val'])
         
-        # Nested AND condition (Optional)
         if r['use_nested'] and r['nest_col'] in df.columns:
             nest_mask = evaluate_cond(df[r['nest_col']], r['nest_op'], r['nest_val'])
             fail_mask = fail_mask & nest_mask
 
-        # Apply standard failure
         df[col_name] = pre_mask & fail_mask
         
-        # Check Critical Severity
         if r['use_severe'] and r['sev_col'] in df.columns:
             sev_mask = evaluate_cond(df[r['sev_col']], r['sev_op'], r['sev_val'])
             df[crit_col_name] = df[col_name] & sev_mask
             active_criticals.append(crit_col_name)
         else:
-            df[crit_col_name] = False # No critical rules defined for this KPI
+            df[crit_col_name] = False
             
     df["_TOTAL_FAILS"] = df[active_fails].sum(axis=1) if active_fails else 0
     df["_IS_OK"] = df["_TOTAL_FAILS"] == 0
     return df, active_fails, active_criticals
 
 # ==========================================================
-# SIDEBAR: DATA LOAD & GLOBAL FILTERS
+# SIDEBAR: DATA LOAD, CONFIG & GLOBAL FILTERS
 # ==========================================================
 with st.sidebar:
     st.markdown("### 📡 Central BI Command")
     uploaded_file = st.file_uploader("Upload Master Dataset", type=["xlsx", "xls", "csv"])
+
+    if st.session_state.dynamic_rules:
+        with st.expander("💾 Config Management"):
+            config_json = json.dumps(st.session_state.dynamic_rules)
+            st.download_button("Export Config", data=config_json, file_name="air_config.json", mime="application/json")
+            
+    uploaded_config = st.sidebar.file_uploader("Import Config", type=["json"])
+    if uploaded_config is not None:
+        st.session_state.dynamic_rules = json.load(uploaded_config)
 
 if not uploaded_file:
     st.info("👈 Upload your Site Data to begin building your intelligence platform.")
@@ -152,17 +149,19 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🌍 Global Drill-Downs")
     
-    # Global Filters Builder
     geo_col = "Auto_Circle" if "Auto_Circle" in cols else "None"
     macro_col = "Macro/ULS" if "Macro/ULS" in cols else "None"
     dist_col = "District" if "District" in cols else "None"
     town_col = "Town" if "Town" in cols else "None"
     cluster_col = "Cluster" if "Cluster" in cols else "None"
+    toco_col = "Site- Principal Owner" if "Site- Principal Owner" in cols else "None"
     
     f_geo = st.selectbox("Circle", ["All"] + sorted(raw_df[geo_col].unique())) if geo_col != "None" else "All"
     
-    # Filter chaining for dynamic dropdowns
     temp_df = raw_df if f_geo == "All" else raw_df[raw_df[geo_col] == f_geo]
+    
+    f_toco = st.selectbox("Principal Owner (Toco)", ["All"] + sorted(temp_df[toco_col].unique())) if toco_col != "None" else "All"
+    if f_toco != "All": temp_df = temp_df[temp_df[toco_col] == f_toco]
     
     f_macro = st.selectbox("Macro/ULS", ["All"] + sorted(temp_df[macro_col].unique())) if macro_col != "None" else "All"
     if f_macro != "All": temp_df = temp_df[temp_df[macro_col] == f_macro]
@@ -175,12 +174,20 @@ with st.sidebar:
     
     f_cluster = st.selectbox("Cluster", ["All"] + sorted(temp_df[cluster_col].unique())) if cluster_col != "None" else "All"
 
-# Process Rules on FULL data, then apply global filters for speed
+# Display Active Mapping
+with st.sidebar.expander("🗺️ Current Filter Mapping"):
+    st.write(f"**Circle:** {f_geo}")
+    st.write(f"**Toco:** {f_toco}")
+    st.write(f"**Macro/ULS:** {f_macro}")
+    st.write(f"**District:** {f_dist}")
+    st.write(f"**Town:** {f_town}")
+    st.write(f"**Cluster:** {f_cluster}")
+
 processed_df, fails, crits = apply_rules(raw_df, st.session_state.dynamic_rules)
 
-# Apply Filters
 final_df = processed_df.copy()
 if f_geo != "All": final_df = final_df[final_df[geo_col] == f_geo]
+if f_toco != "All": final_df = final_df[final_df[toco_col] == f_toco]
 if f_macro != "All": final_df = final_df[final_df[macro_col] == f_macro]
 if f_dist != "All": final_df = final_df[final_df[dist_col] == f_dist]
 if f_town != "All": final_df = final_df[final_df[town_col] == f_town]
@@ -194,23 +201,17 @@ total_sites = len(final_df)
 with st.sidebar:
     st.markdown("---")
     st.markdown("### 🧭 Navigation")
-    
-    # Dynamic Pages
     pages = ["🏠 Home Summary", "⚙️ Logic Setup Studio"]
-    
-    # Add a page for every KPI marked as "Critical Dashboard"
     critical_dashboards = [r['name'] for r in st.session_state.dynamic_rules if r.get('make_dash', False)]
     for d in critical_dashboards:
         pages.append(f"📊 {d} Deep Dive")
-        
     selection = st.radio("Go to:", pages)
 
 # ==========================================================
-# PAGE 1: LOGIC SETUP STUDIO (The Engine Room)
+# PAGE 1: LOGIC SETUP STUDIO
 # ==========================================================
 if selection == "⚙️ Logic Setup Studio":
     st.title("⚙️ Logic Setup Studio")
-    st.markdown("Define exactly how KPIs are calculated, apply nested rules, and generate dedicated deep-dive dashboards.")
     
     with st.expander("➕ Create New KPI Rule", expanded=True):
         col1, col2 = st.columns(2)
@@ -235,7 +236,6 @@ if selection == "⚙️ Logic Setup Studio":
             
             st.markdown("---")
             use_sev = st.checkbox("4. Define 'Critical' Severity Level?")
-            st.caption("Identify highly degraded sites within this failure.")
             s_col = st.selectbox("Severity Column", cols) if use_sev else None
             s_op = st.selectbox("Severity Op", ["<", ">", "==", "<=", ">="]) if use_sev else None
             s_val = st.text_input("Severity Threshold (e.g., Backup < 2)") if use_sev else None
@@ -257,8 +257,7 @@ if selection == "⚙️ Logic Setup Studio":
         st.subheader("Active KPI Intelligence")
         for i, rule in enumerate(st.session_state.dynamic_rules):
             with st.container():
-                st.markdown(f"**{rule['name']}** {'(Has Dedicated Dash)' if rule['make_dash'] else ''}")
-                st.caption(f"FAIL IF: `{rule['fail_col']} {rule['fail_op']} {rule['fail_val']}`")
+                st.markdown(f"**{rule['name']}**")
                 if st.button(f"Delete {rule['name']}", key=f"del_{i}"):
                     st.session_state.dynamic_rules.pop(i)
                     st.rerun()
@@ -273,53 +272,42 @@ elif selection == "🏠 Home Summary":
     ok_count = final_df["_IS_OK"].sum() if total_sites > 0 else 0
     fail_count = total_sites - ok_count
     
-    # 3D Metric Cards
     st.markdown(f"""
     <div style="display:flex; gap: 20px;">
-        <div class="card-3d" style="flex:1;">
-            <div class="card-title">Total Filtered Sites</div>
-            <div class="card-value">{total_sites:,}</div>
-        </div>
-        <div class="card-3d" style="flex:1;">
-            <div class="card-title">Sites 100% OK</div>
-            <div class="card-value val-success">{ok_count:,}</div>
-        </div>
-        <div class="card-3d" style="flex:1;">
-            <div class="card-title">Deficient Sites</div>
-            <div class="card-value val-alert">{fail_count:,}</div>
-        </div>
+        <div class="card-3d" style="flex:1;"><div class="card-title">Total Filtered Sites</div><div class="card-value">{total_sites:,}</div></div>
+        <div class="card-3d" style="flex:1;"><div class="card-title">Sites 100% OK</div><div class="card-value val-success">{ok_count:,}</div></div>
+        <div class="card-3d" style="flex:1;"><div class="card-title">Deficient Sites</div><div class="card-value val-alert">{fail_count:,}</div></div>
     </div>
     """, unsafe_allow_html=True)
 
     if total_sites > 0 and fails:
-        col1, col2 = st.columns([6, 4])
+        st.markdown("### Specific KPI Breakdowns")
+        kpi_cols = st.columns(4)
+        for i, fail_col in enumerate(fails):
+            rule_name = fail_col.replace("FAIL_", "")
+            fail_cnt = final_df[fail_col].sum() if fail_col in final_df.columns else 0
+            kpi_cols[i % 4].markdown(f"<div class='card-3d'><div class='card-title'>{rule_name}</div><div class='card-value val-alert' style='font-size: 1.8rem;'>{fail_cnt:,}</div></div>", unsafe_allow_html=True)
+            
+        st.markdown("---")
+        st.subheader("Deep Visual Insights")
+        view_toggle = st.radio("Select Analysis Dimension:", ["Cluster-wise Insights", "Toco-wise Insights"], horizontal=True)
         
-        with col1:
-            st.subheader("Matrix View")
-            # Build matrix like Excel
-            h_cols = [c for c in ["Macro/ULS", "DG/ Non-DG", "Site- Principal Owner"] if c in final_df.columns]
-            if not h_cols: h_cols = [final_df.columns[0]]
-            
-            matrix = final_df.groupby(h_cols).agg(Total=('_IS_OK', 'count'), OK=('_IS_OK', 'sum'))
-            matrix['Deficient'] = matrix['Total'] - matrix['OK']
-            for f in fails: matrix[f.replace("FAIL_", "")] = final_df.groupby(h_cols)[f].sum()
-            st.dataframe(matrix, use_container_width=True, height=400)
-            
-        with col2:
-            st.subheader("Deficiency Breakdown")
-            fail_sums = final_df[fails].sum().reset_index()
-            fail_sums.columns = ["Type", "Count"]
-            fail_sums["Type"] = fail_sums["Type"].str.replace("FAIL_", "")
-            
-            # 3D-styled Altair Chart
-            chart = alt.Chart(fail_sums).mark_bar(cornerRadiusEnd=4, color=alt.Gradient(
-                gradient='linear', stops=[alt.GradientStop(color='#ff4b4b', offset=0), alt.GradientStop(color='#8b0000', offset=1)]
-            )).encode(
-                x=alt.X('Count:Q', title=""),
-                y=alt.Y('Type:N', sort='-x', title=""),
-                tooltip=['Type', 'Count']
-            ).properties(height=400)
+        melted_df = final_df.melt(id_vars=[cluster_col, toco_col], value_vars=fails, var_name="Failure Type", value_name="Failed")
+        melted_df = melted_df[melted_df["Failed"] == True]
+        melted_df["Failure Type"] = melted_df["Failure Type"].str.replace("FAIL_", "")
+        
+        view_col = cluster_col if view_toggle == "Cluster-wise Insights" else toco_col
+        
+        if view_col != "None" and not melted_df.empty:
+            chart = alt.Chart(melted_df).mark_bar().encode(
+                x=alt.X(f'{view_col}:N', title=view_col, sort='-y'),
+                y=alt.Y('count():Q', title="Total Failures"),
+                color=alt.Color('Failure Type:N', scale=alt.Scale(scheme='category20b')),
+                tooltip=[view_col, 'Failure Type', 'count()']
+            ).properties(height=450, title=f"Failure Distribution by {view_col}")
             st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("Insufficient data to generate insight visuals for this selection.")
     else:
         st.info("Head to the Logic Setup Studio to define KPIs.")
 
@@ -348,33 +336,28 @@ else:
     
     if total_kpi_fails > 0:
         c1, c2 = st.columns(2)
-        
-        # Breakdown by District
         if dist_col != "None":
             dist_df = kpi_df.groupby(dist_col).size().reset_index(name='Count').sort_values('Count', ascending=False).head(15)
-            ch1 = alt.Chart(dist_df).mark_bar(color='#219ebc', cornerRadiusTop=4).encode(
+            ch1 = alt.Chart(dist_df).mark_bar(color='#219ebc').encode(
                 x=alt.X(f'{dist_col}:N', sort='-y', title="District"),
                 y=alt.Y('Count:Q'), tooltip=[dist_col, 'Count']
-            ).properties(title="Top 15 Districts (Fail Count)", height=350)
+            ).properties(title="Top 15 Districts", height=350)
             c1.altair_chart(ch1, use_container_width=True)
             
-        # Breakdown by Cluster
         if cluster_col != "None":
             clus_df = kpi_df.groupby(cluster_col).size().reset_index(name='Count').sort_values('Count', ascending=False).head(15)
-            ch2 = alt.Chart(clus_df).mark_bar(color='#fb8500', cornerRadiusTop=4).encode(
+            ch2 = alt.Chart(clus_df).mark_bar(color='#fb8500').encode(
                 x=alt.X(f'{cluster_col}:N', sort='-y', title="Cluster"),
                 y=alt.Y('Count:Q'), tooltip=[cluster_col, 'Count']
-            ).properties(title="Top 15 Clusters (Fail Count)", height=350)
+            ).properties(title="Top 15 Clusters", height=350)
             c2.altair_chart(ch2, use_container_width=True)
 
         st.subheader(f"Actionable Data: {kpi_name}")
-        
-        # Let user download only the failed sites for THIS specific KPI
         clean_cols = [c for c in kpi_df.columns if not c.startswith("FAIL_") and not c.startswith("CRIT_") and not c.startswith("_")]
         
         col_btn, _ = st.columns([2, 8])
         csv_export = kpi_df[clean_cols].to_csv(index=False).encode('utf-8')
-        col_btn.download_button(f"📥 Download {kpi_name} Actions", data=csv_export, file_name=f"{kpi_name}_actionable.csv")
+        col_btn.download_button(f"📥 Download Actions", data=csv_export, file_name=f"{kpi_name}_actionable.csv")
         
         st.dataframe(kpi_df[clean_cols].head(1000), use_container_width=True)
     else:
