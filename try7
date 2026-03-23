@@ -1,0 +1,292 @@
+# ==========================================================
+# app.py — AIR V4: Advanced Matrix Dashboard & Analytics
+# RUN USING: python app.py
+# ==========================================================
+
+import os, sys, subprocess
+import re
+import pandas as pd
+import numpy as np
+import streamlit as st
+import altair as alt
+
+# ------------------ Auto Streamlit Launcher ----------------
+def _inside_streamlit():
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
+
+if not _inside_streamlit():
+    subprocess.run([sys.executable, "-m", "streamlit", "run", os.path.abspath(__file__)], check=False)
+    sys.exit(0)
+
+# ==========================================================
+# CONFIG & FUTURISTIC CSS
+# ==========================================================
+st.set_page_config(page_title="AIR Smart Matrix", layout="wide", initial_sidebar_state="expanded")
+
+st.markdown("""
+<style>
+    /* Clean, high-contrast corporate look */
+    .stApp { background-color: #f8f9fa; }
+    .kpi-container { display: flex; gap: 1rem; margin-bottom: 2rem; }
+    .kpi-card {
+        flex: 1; background: #ffffff; padding: 1.5rem; border-radius: 10px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-top: 4px solid #e0e0e0;
+        text-align: center; font-family: 'Segoe UI', sans-serif;
+    }
+    .kpi-card.alert { border-top-color: #d32f2f; }
+    .kpi-card.success { border-top-color: #2e7d32; }
+    .kpi-card.info { border-top-color: #1976d2; }
+    .kpi-title { font-size: 0.95rem; color: #6c757d; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .kpi-value { font-size: 2.2rem; font-weight: 700; margin-top: 0.5rem; color: #212529; }
+    .kpi-value.alert-text { color: #d32f2f; }
+    .kpi-value.success-text { color: #2e7d32; }
+    
+    /* Matrix Table Styling */
+    .stDataFrame { border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+    
+    /* Sidebar styling */
+    .css-1d391kg { background-color: #1e1e1e; }
+    .st-bb { background-color: transparent; }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================================
+# DEFAULT RULE CONFIGURATION (Pre-mapped to your columns)
+# ==========================================================
+# These process ONCE based on your logic: e.g., DG checks only run if site is DG.
+DEFAULT_RULES = [
+    {"name": "Automation Issue", "use_precond": True, "pre_col": "DG/ Non-DG", "pre_op": "==", "pre_val": "DG", "fail_col": "DG Automation (Yes/No)", "fail_op": "==", "fail_val": "No"},
+    {"name": "SMPS/IPMS Fault", "use_precond": False, "pre_col": "", "pre_op": "==", "pre_val": "", "fail_col": "SMPS/IPMS/PIU Faulty (Yes/No)", "fail_op": "==", "fail_val": "Yes"},
+    {"name": "Low BB", "use_precond": False, "pre_col": "", "pre_op": "==", "pre_val": "", "fail_col": "BB Low (Yes/No)", "fail_op": "==", "fail_val": "Yes"},
+    {"name": "High Temp", "use_precond": False, "pre_col": "", "pre_op": "==", "pre_val": "", "fail_col": "High Temperature (Yes/No)", "fail_op": "==", "fail_val": "Yes"},
+    {"name": "TCU Fault", "use_precond": False, "pre_col": "", "pre_op": "==", "pre_val": "", "fail_col": "TCU Status (OK/Not OK)", "fail_op": "==", "fail_val": "Not OK"},
+    {"name": "Earthing Issue", "use_precond": False, "pre_col": "", "pre_op": "==", "pre_val": "", "fail_col": "Earthing Status (Ok/Not OK)", "fail_op": "==", "fail_val": "Not OK"},
+    {"name": "Access Issue", "use_precond": False, "pre_col": "", "pre_op": "==", "pre_val": "", "fail_col": "Owner/Access Issues (Yes/No)", "fail_op": "==", "fail_val": "Yes"},
+]
+
+if 'smart_rules' not in st.session_state:
+    st.session_state.smart_rules = DEFAULT_RULES
+
+# ==========================================================
+# CORE ENGINE (Cached for extreme performance)
+# ==========================================================
+@st.cache_data(show_spinner="Loading core dataset...")
+def load_and_clean_data(file):
+    df = pd.read_csv(file, engine="python") if file.name.endswith(".csv") else pd.read_excel(file)
+    df.columns = [re.sub(r"\s+", " ", str(c).replace("\n", " ")).strip() for c in df.columns]
+    
+    # Fast string conversion
+    obj_cols = df.select_dtypes(include=['object']).columns
+    df[obj_cols] = df[obj_cols].astype(str)
+    
+    # Auto-infer Circle
+    site_col = next((c for c in df.columns if "site id" in c.lower()), None)
+    if site_col and 'Auto_Circle' not in df.columns:
+        df['Auto_Circle'] = np.where(df[site_col].str.upper().str.startswith('B'), 'Bihar',
+                            np.where(df[site_col].str.upper().str.startswith('J'), 'Jharkhand', 'Other'))
+    return df
+
+def evaluate_condition(series, op, val):
+    s_lower = series.str.lower().str.strip()
+    v_lower = str(val).lower().strip()
+    if op == "==": return s_lower == v_lower
+    if op == "!=": return s_lower != v_lower
+    if op == "Contains": return s_lower.str.contains(v_lower, na=False)
+    
+    num_series = pd.to_numeric(series, errors='coerce')
+    v_num = float(val) if str(val).replace('.','',1).isdigit() else 0
+    if op == ">": return num_series > v_num
+    if op == "<": return num_series < v_num
+    if op == ">=": return num_series >= v_num
+    if op == "<=": return num_series <= v_num
+    return pd.Series(False, index=series.index)
+
+@st.cache_data(show_spinner="Running AI Rule Engine... (Only happens once)")
+def process_kpis(_df, rules):
+    df = _df.copy()
+    fail_cols = []
+    
+    for r in rules:
+        col_name = f"FAIL_{r['name']}"
+        # Skip if column doesn't exist in data
+        if r['fail_col'] not in df.columns:
+            continue
+            
+        fail_cols.append(col_name)
+        
+        # 1. Pre-condition (e.g., Only DG sites)
+        if r['use_precond'] and r['pre_col'] in df.columns:
+            pre_mask = evaluate_condition(df[r['pre_col']], r['pre_op'], r['pre_val'])
+        else:
+            pre_mask = pd.Series(True, index=df.index)
+            
+        # 2. Failure condition
+        fail_mask = evaluate_condition(df[r['fail_col']], r['fail_op'], r['fail_val'])
+        
+        # 3. Apply strict logic
+        df[col_name] = pre_mask & fail_mask
+        
+    df["_FAIL_COUNT"] = df[fail_cols].sum(axis=1) if fail_cols else 0
+    df["_IS_OK"] = df["_FAIL_COUNT"] == 0
+    
+    return df, fail_cols
+
+# ==========================================================
+# UI & SIDEBAR ARCHITECTURE
+# ==========================================================
+with st.sidebar:
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/b/b2/Bharti_Airtel_Logo.svg/512px-Bharti_Airtel_Logo.svg.png", width=150)
+    st.markdown("### 📡 Central Command")
+    uploaded_file = st.file_uploader("Upload Master Excel/CSV", type=["xlsx", "xls", "csv"])
+
+if not uploaded_file:
+    st.info("👋 Welcome to the Smart Matrix Dashboard. Please upload your Site Master Data in the sidebar to begin.")
+    st.stop()
+
+# Load Data
+raw_df = load_and_clean_data(uploaded_file)
+cols = raw_df.columns.tolist()
+
+# Process KPIs (Cached)
+processed_df, active_fails = process_kpis(raw_df, st.session_state.smart_rules)
+
+# Filter Controls
+with st.sidebar:
+    st.markdown("---")
+    st.markdown("### 🎯 Global Filters")
+    
+    geo_col = "Auto_Circle" if "Auto_Circle" in cols else cols[0]
+    macro_col = "Macro/ULS" if "Macro/ULS" in cols else "None"
+    toco_col = "Site- Principal Owner" if "Site- Principal Owner" in cols else "None"
+    
+    selected_geo = st.selectbox("Circle", ["All"] + sorted(processed_df[geo_col].unique()))
+    
+    # Filter chaining
+    f_df = processed_df if selected_geo == "All" else processed_df[processed_df[geo_col] == selected_geo]
+    
+    selected_macro = "All"
+    if macro_col != "None":
+        selected_macro = st.selectbox("Macro / ULS", ["All"] + sorted(f_df[macro_col].unique()))
+        if selected_macro != "All": f_df = f_df[f_df[macro_col] == selected_macro]
+        
+    selected_toco = "All"
+    if toco_col != "None":
+        selected_toco = st.selectbox("Principal Owner (Toco)", ["All"] + sorted(f_df[toco_col].unique()))
+        if selected_toco != "All": f_df = f_df[f_df[toco_col] == selected_toco]
+
+    st.markdown("---")
+    with st.expander("⚙️ Logic / Rule Engine", expanded=False):
+        st.write("Current Failure Logic Configured:")
+        for r in st.session_state.smart_rules:
+            if r['use_precond']:
+                st.caption(f"**{r['name']}**: IF {r['pre_col']}={r['pre_val']} AND {r['fail_col']}={r['fail_val']}")
+            else:
+                st.caption(f"**{r['name']}**: IF {r['fail_col']}={r['fail_val']}")
+
+# Use filtered dataframe for the rest of the app
+df = f_df 
+
+# ==========================================================
+# MAIN DASHBOARD VIEW
+# ==========================================================
+total = len(df)
+ok_count = df["_IS_OK"].sum() if total > 0 else 0
+fail_count = total - ok_count
+ok_pct = (ok_count / total * 100) if total else 0
+
+st.markdown(f"""
+<div class="kpi-container">
+    <div class="kpi-card info"><div class="kpi-title">Total Deployed Sites</div><div class="kpi-value">{total:,}</div></div>
+    <div class="kpi-card success"><div class="kpi-title">Sites OK (Zero Infra Issue)</div><div class="kpi-value success-text">{ok_count:,}</div></div>
+    <div class="kpi-card alert"><div class="kpi-title">Degraded / Deficient Sites</div><div class="kpi-value alert-text">{fail_count:,}</div></div>
+    <div class="kpi-card info"><div class="kpi-title">Network Compliance %</div><div class="kpi-value">{"{:.1f}%".format(ok_pct)}</div></div>
+</div>
+""", unsafe_allow_html=True)
+
+# TABS
+tab_matrix, tab_visuals, tab_data = st.tabs(["📊 Multi-Level Matrix", "📈 Visual Analytics", "📥 Actionable Raw Data"])
+
+with tab_matrix:
+    st.subheader("Site Hierarchy & Deficiency Matrix")
+    st.caption("Matches your Excel output. Grouped hierarchically by Macro/ULS -> DG Status -> Owner.")
+    
+    # Setup exact columns based on user images
+    if total > 0 and active_fails:
+        # Define hierarchy dynamically based on what's available
+        hierarchy = []
+        for c in ["Macro/ULS", "DG/ Non-DG", "Site- Principal Owner"]:
+            if c in df.columns: hierarchy.append(c)
+        
+        if not hierarchy:
+            hierarchy = [df.columns[0]] # Fallback
+            
+        # Build pivot
+        matrix = df.groupby(hierarchy).agg(
+            Total_Sites=('_IS_OK', 'count'),
+            Sites_OK=('_IS_OK', 'sum')
+        )
+        
+        matrix['% OK'] = (matrix['Sites_OK'] / matrix['Total_Sites'] * 100).round(1).astype(str) + '%'
+        matrix['Sites with Deficiencies'] = matrix['Total_Sites'] - matrix['Sites_OK']
+        matrix['% Deficient'] = (matrix['Sites with Deficiencies'] / matrix['Total_Sites'] * 100).round(1).astype(str) + '%'
+        
+        # Add all logic rules dynamically
+        for col in active_fails:
+            clean_name = col.replace("FAIL_", "")
+            matrix[clean_name] = df.groupby(hierarchy)[col].sum()
+            
+        # Clean up column names for display
+        matrix = matrix.rename(columns={"Total_Sites": "Total Sites", "Sites_OK": "Sites with no infra issue"})
+        
+        # Display large dataframe
+        st.dataframe(matrix, use_container_width=True, height=600)
+    else:
+        st.info("No data available to construct matrix.")
+
+with tab_visuals:
+    if total > 0 and active_fails:
+        col1, col2 = st.columns(2)
+        
+        # Chart 1: Deficiency count by type
+        deficiency_totals = df[active_fails].sum().reset_index()
+        deficiency_totals.columns = ['Failure Type', 'Count']
+        deficiency_totals['Failure Type'] = deficiency_totals['Failure Type'].str.replace('FAIL_', '')
+        
+        chart1 = alt.Chart(deficiency_totals).mark_bar(color='#d32f2f').encode(
+            x=alt.X('Count:Q', title='Number of Sites'),
+            y=alt.Y('Failure Type:N', sort='-x', title=''),
+            tooltip=['Failure Type', 'Count']
+        ).properties(title="Total Deficiencies by Category", height=350)
+        
+        col1.altair_chart(chart1, use_container_width=True)
+        
+        # Chart 2: Top Offenders (Toco)
+        if "Site- Principal Owner" in df.columns:
+            toco_fails = df[~df['_IS_OK']].groupby("Site- Principal Owner").size().reset_index(name='Deficient Sites')
+            chart2 = alt.Chart(toco_fails).mark_bar(color='#1976d2').encode(
+                x=alt.X('Site- Principal Owner:N', sort='-y', title='Principal Owner'),
+                y=alt.Y('Deficient Sites:Q', title='Count'),
+                tooltip=['Site- Principal Owner', 'Deficient Sites']
+            ).properties(title="Deficient Sites by Principal Owner", height=350)
+            col2.altair_chart(chart2, use_container_width=True)
+
+with tab_data:
+    if total > 0:
+        st.subheader("Deep-Dive Export")
+        view_mode = st.radio("Dataset View:", ["Deficient Sites Only (Actionable)", "All Sites"], horizontal=True)
+        
+        export_df = df[~df["_IS_OK"]] if view_mode == "Deficient Sites Only (Actionable)" else df
+        export_df = export_df.sort_values(by="_FAIL_COUNT", ascending=False)
+        
+        # Remove processing columns for clean export
+        clean_cols = [c for c in export_df.columns if not c.startswith("FAIL_") and not c.startswith("_")]
+        
+        col_dl, _ = st.columns([2, 8])
+        csv_data = export_df[clean_cols].to_csv(index=False).encode('utf-8')
+        col_dl.download_button(label="📥 Download Excel/CSV Data", data=csv_data, file_name="Site_Action_Plan.csv", mime="text/csv")
+        
+        st.dataframe(export_df[clean_cols].head(500), use_container_width=True)
