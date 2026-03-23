@@ -38,7 +38,7 @@ with st.sidebar:
     st.header("⚙️ KPI Engine Room")
     st.markdown("Configure nested logic for 100% OK calculation.")
     
-    # Main KPI Toggles (As seen in your first screenshot)
+    # Main KPI Toggles 
     st.subheader("✅ KPIs for 100% OK")
     check_battery = st.checkbox("Battery", value=True)
     check_dg = st.checkbox("DG Automation", value=True)
@@ -77,11 +77,8 @@ df['Failure_Reasons'] = ""
 
 # Condition 1: Nested DG Logic
 if check_dg:
-    # Layer 1: Is it applicable?
     is_dg = df["DG/Non-DG ULS"].str.upper() == "DG"
     has_automation = df["DG Automation (Yes/No)"].str.upper() == "YES"
-    
-    # Layer 2: Did it fail? (Fails if SNMP is bad OR Session % is too low)
     snmp_failed = df["DG Automation Status (SNMP)"].isin(dg_fail_states)
     session_failed = df["Automation OK (Session Percentage)"] < session_threshold
     
@@ -92,7 +89,6 @@ if check_dg:
 
 # Condition 2: Nested Battery Logic
 if check_battery:
-    # Fails if Hours are low OR (if checked) the specific flags say "Yes"
     hrs_failed = df["Battery Backup (Hrs)"] < battery_min_hrs
     flag_low_failed = (df["BB Low (Yes/No)"].str.upper() == "YES") if check_bb_low_flag else False
     flag_replace_failed = (df["BB Replacement (Yes/No)"].str.upper() == "YES") if check_bb_replace_flag else False
@@ -113,7 +109,6 @@ if check_rm:
 df['Failure_Reasons'] = df['Failure_Reasons'].str.rstrip('; ')
 df['Failure_Reasons'] = df['Failure_Reasons'].replace("", "None")
 
-
 # --- 5. MAIN PAGE: DASHBOARD UI ---
 st.title("📡 Site Health & Failure Distribution")
 st.markdown("---")
@@ -127,7 +122,6 @@ col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Active Sites", f"{total_sites:,}")
 col2.metric("✅ 100% OK Sites", f"{ok_sites:,}", f"{(ok_sites/total_sites)*100:.1f}%")
 col3.metric("🚨 Failed Sites", f"{failed_sites:,}", f"-{failed_sites}", delta_color="inverse")
-# Adding a specific metric for high priority interventions
 critical_battery = df[df["Battery Backup (Hrs)"] < 1.0].shape[0]
 col4.metric("⚠️ Critical Battery (< 1Hr)", f"{critical_battery:,}")
 
@@ -139,7 +133,6 @@ chart_col1, chart_col2 = st.columns(2)
 with chart_col1:
     st.subheader("Distribution of Failure Reasons")
     if failed_sites > 0:
-        # Split string, explode, and count to accurately graph multiple failures per site
         reasons_counts = df[df['Is_100_OK'] == False]['Failure_Reasons'].str.split('; ').explode().value_counts()
         st.bar_chart(reasons_counts, color="#ff4b4b")
     else:
@@ -156,13 +149,11 @@ with chart_col2:
 # Actionable Table
 st.markdown("### 📋 Actionable Site List (Filtered to Failures)")
 
-# Create a clean view of just the failed sites with the most important columns
 failed_df_view = df[df['Is_100_OK'] == False][
     ["SITE ID", "Cluster", "Town", "DG/Non-DG ULS", "DG Automation Status (SNMP)", 
      "Automation OK (Session Percentage)", "Battery Backup (Hrs)", "RM Count (N+1)", "Failure_Reasons"]
 ].copy()
 
-# Round numbers for cleaner display
 failed_df_view["Automation OK (Session Percentage)"] = failed_df_view["Automation OK (Session Percentage)"].round(1)
 failed_df_view["Battery Backup (Hrs)"] = failed_df_view["Battery Backup (Hrs)"].round(2)
 
@@ -171,3 +162,14 @@ st.dataframe(
     use_container_width=True,
     hide_index=True
 )
+
+# --- 6. AUTO-RUN MAGIC ---
+# This block intercepts the standard "Play" button execution in VS Code 
+# and hands it over to Streamlit automatically.
+if __name__ == '__main__':
+    import sys
+    from streamlit.web import cli as stcli
+
+    # Pretend the user typed `streamlit run app.py` in the terminal
+    sys.argv = ["streamlit", "run", sys.argv[0]]
+    sys.exit(stcli.main())
