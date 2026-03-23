@@ -1,25 +1,42 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
 import sys
 import os
 import subprocess
 
-# --- 1. PAGE CONFIGURATION ---
+# --- 1. BULLETPROOF AUTO-LAUNCHER (MUST BE AT THE VERY TOP) ---
+# This intercepts the VS Code "Play" button immediately and boots Streamlit.
+if "streamlit" not in sys.argv[0]:
+    print("Initializing Dashboard Engine...")
+    try:
+        script_path = os.path.abspath(__file__)
+    except NameError:
+        script_path = os.path.abspath(sys.argv[0])
+        
+    # Safely launch Streamlit bypassing Windows path issues
+    subprocess.run([sys.executable, "-m", "streamlit", "run", script_path])
+    sys.exit() # Stops the bare Python execution here
+
+# --- 2. STREAMLIT APP IMPORTS ---
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+# --- 3. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Network Diagnostic Dashboard", layout="wide", initial_sidebar_state="expanded")
 
-# --- 2. DATA INGESTION & UPLOAD ---
+# Initialize an empty DataFrame to guarantee 'df' is always defined
+df = pd.DataFrame()
+
+# --- 4. DATA INGESTION & UPLOAD ---
 with st.sidebar:
     st.header("📂 Data Input")
     uploaded_file = st.file_uploader("Upload Site Data (CSV/Excel)", type=["csv", "xlsx"])
     
-    # Fallback to generate sample data if no file is uploaded yet
     if uploaded_file is None:
         st.warning("Please upload a file, or click below to test with sample data.")
         if st.button("Load Sample Data"):
             np.random.seed(42)
             n_sites = 500
-            df = pd.DataFrame({
+            dummy = pd.DataFrame({
                 "SITE ID": [f"S_{i:05d}" for i in range(1, n_sites + 1)],
                 "Cluster": np.random.choice(["Alpha", "Beta", "Gamma", "Delta"], n_sites),
                 "Town": np.random.choice(["Town A", "Town B", "Town C", "Town D"], n_sites),
@@ -32,15 +49,14 @@ with st.sidebar:
                 "BB Replacement (Yes/No)": np.random.choice(["Yes", "No"], n_sites, p=[0.1, 0.9]),
                 "RM Count (N+1)": np.random.choice(["OK", "Failed", "Degraded"], n_sites, p=[0.85, 0.1, 0.05])
             })
-            st.session_state['dummy_data'] = df
+            st.session_state['dummy_data'] = dummy
         
         if 'dummy_data' in st.session_state:
             df = st.session_state['dummy_data']
             st.success("Sample Data Loaded!")
         else:
-            st.stop() # Stops the rest of the app from running until data is present
+            st.stop() # Halts app rendering until data exists
     else:
-        # Load the actual uploaded file
         try:
             if uploaded_file.name.endswith('.csv'):
                 df = pd.read_csv(uploaded_file)
@@ -50,7 +66,7 @@ with st.sidebar:
             st.error(f"Error loading file: {e}")
             st.stop()
 
-# --- 3. SIDEBAR: ENGINE ROOM & KPI CONFIGURATION ---
+# --- 5. SIDEBAR: ENGINE ROOM & KPI CONFIGURATION ---
 with st.sidebar:
     st.markdown("---")
     st.header("⚙️ KPI Engine Room")
@@ -62,7 +78,6 @@ with st.sidebar:
     
     if check_dg:
         with st.expander("🛠️ DG Logic", expanded=False):
-            # Check if column exists before trying to use it to prevent KeyError
             if "DG Automation Status (SNMP)" in df.columns:
                 dg_opts = df["DG Automation Status (SNMP)"].dropna().unique().tolist()
                 default_dg = [x for x in ["Failed", "Not Reachable"] if x in dg_opts]
@@ -91,13 +106,13 @@ with st.sidebar:
     st.subheader("🏗️ Custom Rule Builder")
     use_custom_rule = st.checkbox("Enable Custom Rule", value=False)
     
-    if use_custom_rule:
+    if use_custom_rule and not df.empty:
         custom_col = st.selectbox("Select Column", df.columns)
         custom_op = st.selectbox("Condition (Fails if)", ["Equals", "Not Equals", "Contains", "Greater Than", "Less Than"])
         custom_val = st.text_input("Value to check")
 
 
-# --- 4. VECTORIZED KPI EVALUATION ---
+# --- 6. VECTORIZED KPI EVALUATION ---
 df['Is_100_OK'] = True
 df['Failure_Reasons'] = ""
 
@@ -147,7 +162,7 @@ except Exception as e:
 df['Failure_Reasons'] = df['Failure_Reasons'].str.rstrip('; ').replace("", "None")
 
 
-# --- 5. MAIN PAGE: DASHBOARD UI ---
+# --- 7. MAIN PAGE: DASHBOARD UI ---
 st.title("📡 Site Health & Failure Distribution")
 st.markdown("---")
 
@@ -192,25 +207,3 @@ st.dataframe(
     use_container_width=True,
     hide_index=True
 )
-
-# --- 6. BULLETPROOF AUTO-RUN MAGIC ---
-if __name__ == '__main__':
-    # Prevent infinite loop if already running in Streamlit
-    if "streamlit" not in sys.argv[0]:
-        print("Initializing Dashboard Engine...")
-        
-        # Safely determine the script path, dodging VS Code Interactive environment errors
-        try:
-            if '__file__' in globals():
-                script_path = os.path.abspath(__file__)
-            else:
-                script_path = os.path.abspath(sys.argv[0])
-            
-            # Use subprocess to safely handle spaces in Windows paths
-            subprocess.run([sys.executable, "-m", "streamlit", "run", script_path])
-        except Exception as e:
-            print(f"\n[CRITICAL ERROR] Auto-launch failed: {e}")
-            print("\nPlease open your VS Code terminal and run this command manually:")
-            print("streamlit run app.py")
-            
-        sys.exit()
