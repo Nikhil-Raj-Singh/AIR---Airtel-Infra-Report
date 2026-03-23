@@ -1,210 +1,281 @@
-import sys
-import os
-import subprocess
+# ==========================================================
+# app.py — Airtel Infra-Health Dashboard (Smart Edition)
+# RUN USING: python app.py
+# ==========================================================
 
-# --- 1. BULLETPROOF AUTO-LAUNCHER (WITH INFINITE LOOP LOCK) ---
-# This checks for a secret environment variable. If it's not there, it sets it and launches Streamlit.
-if os.environ.get("STREAMLIT_AUTO_RUN") != "1":
-    print("Initializing Dashboard Engine...")
-    os.environ["STREAMLIT_AUTO_RUN"] = "1" # Set the lock!
+# ------------------ Auto Streamlit Launcher ----------------
+import os, sys, subprocess
+
+def _inside_streamlit():
     try:
-        script_path = os.path.abspath(__file__)
-    except NameError:
-        script_path = os.path.abspath(sys.argv[0])
-        
-    # Safely launch Streamlit
-    subprocess.run([sys.executable, "-m", "streamlit", "run", script_path])
-    sys.exit() # Stop the bare Python execution
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
 
-# --- 2. STREAMLIT APP IMPORTS ---
-import streamlit as st
+if not _inside_streamlit():
+    subprocess.run(
+        [sys.executable, "-m", "streamlit", "run", os.path.abspath(__file__)],
+        check=False
+    )
+    sys.exit(0)
+
+# ------------------ Imports ------------------
+import re
 import pandas as pd
+import streamlit as st
 import numpy as np
 
-# --- 3. PAGE CONFIGURATION ---
-st.set_page_config(page_title="Network Diagnostic Dashboard", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Site KPI Health Dashboard", layout="wide")
 
-# Initialize an empty DataFrame to guarantee 'df' is always defined
-df = pd.DataFrame()
-
-# --- 4. DATA INGESTION & UPLOAD ---
+# ==========================================================
+# SIDEBAR (CONTROL CENTER)
+# ==========================================================
 with st.sidebar:
-    st.header("📂 Data Input")
-    uploaded_file = st.file_uploader("Upload Site Data (CSV/Excel)", type=["csv", "xlsx"])
-    
-    if uploaded_file is None:
-        st.warning("Please upload a file, or click below to test with sample data.")
-        if st.button("Load Sample Data"):
-            np.random.seed(42)
-            n_sites = 500
-            dummy = pd.DataFrame({
-                "SITE ID": [f"S_{i:05d}" for i in range(1, n_sites + 1)],
-                "Cluster": np.random.choice(["Alpha", "Beta", "Gamma", "Delta"], n_sites),
-                "Town": np.random.choice(["Town A", "Town B", "Town C", "Town D"], n_sites),
-                "DG/Non-DG ULS": np.random.choice(["DG", "Non-DG"], n_sites, p=[0.7, 0.3]),
-                "DG Automation (Yes/No)": np.random.choice(["Yes", "No"], n_sites, p=[0.8, 0.2]),
-                "DG Automation Status (SNMP)": np.random.choice(["OK", "Failed", "Not Reachable", "Timeout"], n_sites, p=[0.7, 0.15, 0.1, 0.05]),
-                "Automation OK (Session Percentage)": np.random.uniform(40.0, 100.0, n_sites),
-                "Battery Backup (Hrs)": np.random.uniform(0.5, 12.0, n_sites),
-                "BB Low (Yes/No)": np.random.choice(["Yes", "No"], n_sites, p=[0.2, 0.8]),
-                "BB Replacement (Yes/No)": np.random.choice(["Yes", "No"], n_sites, p=[0.1, 0.9]),
-                "RM Count (N+1)": np.random.choice(["OK", "Failed", "Degraded"], n_sites, p=[0.85, 0.1, 0.05])
-            })
-            st.session_state['dummy_data'] = dummy
-        
-        if 'dummy_data' in st.session_state:
-            df = st.session_state['dummy_data']
-            st.success("Sample Data Loaded!")
-        else:
-            st.stop()
-    else:
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file)
-        except Exception as e:
-            st.error(f"Error loading file: {e}")
-            st.stop()
+    st.title("⚙ Dashboard Engine")
 
-# --- 5. SIDEBAR: ENGINE ROOM & KPI CONFIGURATION ---
-with st.sidebar:
-    st.markdown("---")
-    st.header("⚙️ KPI Engine Room")
-    
-    st.subheader("✅ Standard Critical KPIs")
-    check_battery = st.checkbox("Battery Check", value=True)
-    check_dg = st.checkbox("DG Automation Check", value=True)
-    check_rm = st.checkbox("RM (N+1) Check", value=True)
-    
-    if check_dg:
-        with st.expander("🛠️ DG Logic", expanded=False):
-            if "DG Automation Status (SNMP)" in df.columns:
-                dg_opts = df["DG Automation Status (SNMP)"].dropna().unique().tolist()
-                default_dg = [x for x in ["Failed", "Not Reachable"] if x in dg_opts]
-                dg_fail_states = st.multiselect("SNMP Failure Statuses:", options=dg_opts, default=default_dg)
-            else:
-                dg_fail_states = []
-                st.warning("Column 'DG Automation Status (SNMP)' missing.")
-            session_threshold = st.slider("Min Session %", 0.0, 100.0, 80.0, step=5.0)
+    uploaded_file = st.file_uploader("📂 Upload KPI Excel / CSV", type=["xlsx", "xls", "csv"])
 
-    if check_battery:
-        with st.expander("🔋 Battery Logic", expanded=False):
-            battery_min_hrs = st.number_input("Min Backup (Hrs)", value=3.0, step=0.5)
-            check_bb_low_flag = st.checkbox("Fail on 'BB Low' = Yes", value=True)
+if not uploaded_file:
+    st.info("👋 Welcome! Please upload your KPI Excel / CSV file in the sidebar to start.")
+    st.stop()
 
-    if check_rm:
-        with st.expander("📡 RM Logic", expanded=False):
-            if "RM Count (N+1)" in df.columns:
-                rm_opts = df["RM Count (N+1)"].dropna().unique().tolist()
-                default_rm = [x for x in ["Failed", "Degraded"] if x in rm_opts]
-                rm_fail_states = st.multiselect("RM Failure Statuses:", options=rm_opts, default=default_rm)
-            else:
-                rm_fail_states = []
-                st.warning("Column 'RM Count (N+1)' missing.")
-
-    st.markdown("---")
-    st.subheader("🏗️ Custom Rule Builder")
-    use_custom_rule = st.checkbox("Enable Custom Rule", value=False)
-    
-    if use_custom_rule and not df.empty:
-        custom_col = st.selectbox("Select Column", df.columns)
-        custom_op = st.selectbox("Condition (Fails if)", ["Equals", "Not Equals", "Contains", "Greater Than", "Less Than"])
-        custom_val = st.text_input("Value to check")
-
-
-# --- 6. VECTORIZED KPI EVALUATION ---
-df['Is_100_OK'] = True
-df['Failure_Reasons'] = ""
-
+# ==========================================================
+# LOAD & CLEAN DATA
+# ==========================================================
 try:
-    if check_dg and "DG/Non-DG ULS" in df.columns and "DG Automation (Yes/No)" in df.columns and "DG Automation Status (SNMP)" in df.columns and "Automation OK (Session Percentage)" in df.columns:
-        is_dg = df["DG/Non-DG ULS"].astype(str).str.upper() == "DG"
-        has_automation = df["DG Automation (Yes/No)"].astype(str).str.upper() == "YES"
-        snmp_failed = df["DG Automation Status (SNMP)"].isin(dg_fail_states)
-        session_failed = pd.to_numeric(df["Automation OK (Session Percentage)"], errors='coerce').fillna(100) < session_threshold
-        
-        dg_mask = is_dg & has_automation & (snmp_failed | session_failed)
-        df.loc[dg_mask, 'Is_100_OK'] = False
-        df.loc[dg_mask, 'Failure_Reasons'] += "DG Auto Issue; "
-
-    if check_battery and "Battery Backup (Hrs)" in df.columns and "BB Low (Yes/No)" in df.columns:
-        hrs_failed = pd.to_numeric(df["Battery Backup (Hrs)"], errors='coerce').fillna(99) < battery_min_hrs
-        flag_low_failed = (df["BB Low (Yes/No)"].astype(str).str.upper() == "YES") if check_bb_low_flag else False
-        
-        batt_mask = hrs_failed | flag_low_failed
-        df.loc[batt_mask, 'Is_100_OK'] = False
-        df.loc[batt_mask, 'Failure_Reasons'] += "Battery Issue; "
-
-    if check_rm and "RM Count (N+1)" in df.columns:
-        rm_mask = df["RM Count (N+1)"].isin(rm_fail_states)
-        df.loc[rm_mask, 'Is_100_OK'] = False
-        df.loc[rm_mask, 'Failure_Reasons'] += "RM (N+1) Failed; "
-
-    if use_custom_rule and custom_val:
-        if custom_op == "Equals":
-            custom_mask = df[custom_col].astype(str).str.strip().str.lower() == custom_val.strip().lower()
-        elif custom_op == "Not Equals":
-            custom_mask = df[custom_col].astype(str).str.strip().str.lower() != custom_val.strip().lower()
-        elif custom_op == "Contains":
-            custom_mask = df[custom_col].astype(str).str.contains(custom_val, case=False, na=False)
-        elif custom_op == "Greater Than":
-            custom_mask = pd.to_numeric(df[custom_col], errors='coerce') > float(custom_val)
-        elif custom_op == "Less Than":
-            custom_mask = pd.to_numeric(df[custom_col], errors='coerce') < float(custom_val)
-        
-        df.loc[custom_mask, 'Is_100_OK'] = False
-        df.loc[custom_mask, 'Failure_Reasons'] += f"Custom Rule ({custom_col}); "
-
+    if uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file, engine="python", encoding="utf-8")
+    else:
+        df = pd.read_excel(uploaded_file)
 except Exception as e:
-    st.error(f"Error applying logic: {e}")
+    st.error(f"Error loading file: {e}")
+    st.stop()
 
-# Clean up text
+def normalize(col):
+    return re.sub(r"\s+", " ", str(col).replace("\n", " ")).strip()
+
+def make_unique(cols):
+    seen = {}
+    result = []
+    for c in cols:
+        c = normalize(c)
+        if c not in seen:
+            seen[c] = 0
+            result.append(c)
+        else:
+            seen[c] += 1
+            result.append(f"{c}__{seen[c]}")
+    return result
+
+df.columns = make_unique(df.columns)
+
+# ==========================================================
+# SMART AUTO COLUMN MAPPING
+# ==========================================================
+def smart_find_col(keywords):
+    # Converts keywords to lower case and looks for them in column names
+    for col in df.columns:
+        col_lower = col.lower()
+        if any(keyword in col_lower for keyword in keywords):
+            return col
+    return df.columns[0] # Fallback to first column if nothing matches
+
+AUTO_MAP = {
+    "Site ID": smart_find_col(["site id", "site_id", "siteid"]),
+    "Cluster": smart_find_col(["cluster", "zone"]),
+    "DG Type (Macro/ULS)": smart_find_col(["dg/non", "site type", "macro"]),
+    "DG Automation Status": smart_find_col(["automation status", "snmp", "dg auto"]),
+    "Battery Backup (Hrs)": smart_find_col(["battery backup (hrs)", "battery", "backup"]),
+    "RM Count": smart_find_col(["rm count", "rm (n+1)", "rm status"]),
+}
+
+with st.sidebar:
+    with st.expander("🔗 Data Column Mapping", expanded=False):
+        st.caption("Verify that your Excel columns matched correctly.")
+        COL_SITE    = st.selectbox("Site ID", df.columns, index=df.columns.get_loc(AUTO_MAP["Site ID"]))
+        COL_CLUSTER = st.selectbox("Cluster", df.columns, index=df.columns.get_loc(AUTO_MAP["Cluster"]))
+        COL_DG_TYPE = st.selectbox("DG / Non-DG Type", df.columns, index=df.columns.get_loc(AUTO_MAP["DG Type (Macro/ULS)"]))
+        COL_DG_STAT = st.selectbox("DG Automation Status", df.columns, index=df.columns.get_loc(AUTO_MAP["DG Automation Status"]))
+        COL_BB      = st.selectbox("Battery Backup (Hrs)", df.columns, index=df.columns.get_loc(AUTO_MAP["Battery Backup (Hrs)"]))
+        COL_RM      = st.selectbox("RM Count (N+1)", df.columns, index=df.columns.get_loc(AUTO_MAP["RM Count"]))
+
+    st.markdown("---")
+    st.markdown("### ✅ Critical KPI Rules")
+    
+    USE_BB = st.checkbox("Check Battery Backup", True)
+    if USE_BB:
+        BB_THRESHOLD = st.number_input("Min Battery OK (Hrs)", value=4.0, step=0.5)
+
+    USE_DG = st.checkbox("Check DG Automation", True)
+    if USE_DG:
+        # Dynamically fetch available statuses from the data for the user to select what counts as 'Failed'
+        available_statuses = df[COL_DG_STAT].astype(str).unique().tolist()
+        default_fails = [s for s in available_statuses if s.lower() in ["failed", "not reachable", "timeout", "no"]]
+        DG_FAIL_STATES = st.multiselect("SNMP Failure Statuses:", available_statuses, default=default_fails)
+
+    USE_RM = st.checkbox("Check RM Count (N+1)", True)
+    if USE_RM:
+        available_rm = df[COL_RM].astype(str).unique().tolist()
+        rm_default_fails = [s for s in available_rm if s.lower() in ["failed", "no", "not ok", "0"]]
+        RM_FAIL_STATES = st.multiselect("RM Failure Statuses:", available_rm, default=rm_default_fails)
+
+    st.markdown("---")
+    st.markdown("### 🏗️ Custom Rule (Optional)")
+    use_custom = st.checkbox("Enable Custom Rule")
+    if use_custom:
+        custom_col = st.selectbox("Target Column", df.columns)
+        custom_val = st.text_input("Fails if exactly equals:")
+
+# ==========================================================
+# SMART NESTED KPI LOGIC (VECTORIZED)
+# ==========================================================
+# Initialize trackers
+df["Is_100_OK"] = True
+df["Failure_Reasons"] = ""
+df["_fail_count"] = 0
+
+# 1. SMART DG LOGIC (Nested)
+if USE_DG:
+    # First check if it's actually a DG site
+    is_dg = df[COL_DG_TYPE].astype(str).str.contains("DG", case=False, na=False)
+    # Then check if the status is in your selected failure list
+    snmp_failed = df[COL_DG_STAT].astype(str).isin(DG_FAIL_STATES)
+    
+    # Nested Condition: Fails ONLY if it is a DG AND SNMP failed
+    dg_mask = is_dg & snmp_failed
+    
+    df.loc[dg_mask, "Is_100_OK"] = False
+    df.loc[dg_mask, "Failure_Reasons"] += "DG Auto Failed; "
+    df.loc[dg_mask, "_fail_count"] += 1
+
+# 2. BATTERY LOGIC
+if USE_BB:
+    # Safely convert to numeric, turning text like 'N/A' into NaN, then filling with 99 so it passes
+    bb_failed = pd.to_numeric(df[COL_BB], errors='coerce').fillna(999) < BB_THRESHOLD
+    
+    df.loc[bb_failed, "Is_100_OK"] = False
+    df.loc[bb_failed, "Failure_Reasons"] += f"Low Battery (<{BB_THRESHOLD}h); "
+    df.loc[bb_failed, "_fail_count"] += 1
+
+# 3. RM LOGIC
+if USE_RM:
+    rm_failed = df[COL_RM].astype(str).isin(RM_FAIL_STATES)
+    
+    df.loc[rm_failed, "Is_100_OK"] = False
+    df.loc[rm_failed, "Failure_Reasons"] += "RM Failed; "
+    df.loc[rm_failed, "_fail_count"] += 1
+
+# 4. CUSTOM RULE
+if use_custom and custom_val:
+    custom_failed = df[custom_col].astype(str).str.strip().str.lower() == custom_val.strip().lower()
+    df.loc[custom_failed, "Is_100_OK"] = False
+    df.loc[custom_failed, "Failure_Reasons"] += f"Custom Rule ({custom_col}); "
+    df.loc[custom_failed, "_fail_count"] += 1
+
+# Clean up diagnostic text
 df['Failure_Reasons'] = df['Failure_Reasons'].str.rstrip('; ').replace("", "None")
 
+# ==========================================================
+# CLUSTER FILTER
+# ==========================================================
+clusters = ["All"] + sorted(df[COL_CLUSTER].dropna().astype(str).unique().tolist())
+selected_cluster = st.selectbox("📍 Filter by Cluster", clusters)
 
-# --- 7. MAIN PAGE: DASHBOARD UI ---
-st.title("📡 Site Health & Failure Distribution")
-st.markdown("---")
+fdf = df if selected_cluster == "All" else df[df[COL_CLUSTER] == selected_cluster]
 
-total_sites = len(df)
-ok_sites = df['Is_100_OK'].sum()
-failed_sites = total_sites - ok_sites
+# ==========================================================
+# KPI SUMMARY CARDS
+# ==========================================================
+total = len(fdf)
+ok_count = fdf["Is_100_OK"].sum()
+not_ok_count = total - ok_count
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Active Sites", f"{total_sites:,}")
-col2.metric("✅ 100% OK Sites", f"{ok_sites:,}", f"{(ok_sites/total_sites)*100:.1f}%" if total_sites > 0 else "0%")
-col3.metric("🚨 Failed Sites", f"{failed_sites:,}", f"-{failed_sites}", delta_color="inverse")
+ok_pct = (ok_count / total * 100) if total else 0
+not_ok_pct = (not_ok_count / total * 100) if total else 0
 
-if "Battery Backup (Hrs)" in df.columns:
-    critical_battery = df[pd.to_numeric(df["Battery Backup (Hrs)"], errors='coerce') < 1.0].shape[0]
-    col4.metric("⚠️ Critical Battery (< 1Hr)", f"{critical_battery:,}")
+c1, c2, c3 = st.columns(3)
+c1.metric("📊 Total Sites", f"{total:,}")
+c2.metric("✅ 100% OK Sites", f"{ok_count:,}  ({ok_pct:.1f}%)")
+c3.metric("🚨 Not OK Sites", f"{not_ok_count:,}  ({not_ok_pct:.1f}%)", delta=f"-{not_ok_count}", delta_color="inverse")
 
-st.markdown("<br>", unsafe_allow_html=True)
+st.divider()
 
-chart_col1, chart_col2 = st.columns(2)
+# ==========================================================
+# TABS
+# ==========================================================
+tab_overview, tab_notok, tab_kpi = st.tabs(["📊 Overview", "🚨 Actionable Sites", "🔍 Deep Dive"])
 
-with chart_col1:
-    st.subheader("Distribution of Failure Reasons")
-    if failed_sites > 0:
-        reasons_counts = df[df['Is_100_OK'] == False]['Failure_Reasons'].str.split('; ').explode().value_counts()
-        st.bar_chart(reasons_counts, color="#ff4b4b")
+# ==========================================================
+# TAB 1 — OVERVIEW
+# ==========================================================
+with tab_overview:
+    col_chart1, col_chart2 = st.columns(2)
+    
+    with col_chart1:
+        st.subheader("Distribution of Failure Reasons")
+        if not_ok_count > 0:
+            # Explode splits up "Low Battery; DG Auto Failed" into two counts for accurate graphing
+            reasons_df = fdf[fdf["Is_100_OK"] == False]['Failure_Reasons'].str.split('; ').explode().value_counts()
+            st.bar_chart(reasons_df, color="#ff4b4b")
+        else:
+            st.success("No failures to display!")
+
+    with col_chart2:
+        st.subheader("Not OK Sites by Cluster")
+        if selected_cluster == "All" and not_ok_count > 0:
+            cluster_fails = fdf[fdf["Is_100_OK"] == False][COL_CLUSTER].value_counts()
+            st.bar_chart(cluster_fails, color="#ff9f36")
+        elif not_ok_count > 0:
+             st.info(f"Viewing specific cluster: {selected_cluster}")
+        else:
+             st.success("All sites OK!")
+
+# ==========================================================
+# TAB 2 — ACTIONABLE SITES (WORST AFFECTED)
+# ==========================================================
+with tab_notok:
+    st.subheader("🚨 Sites Requiring Immediate Action")
+    
+    if not_ok_count > 0:
+        worst_df = fdf[fdf["Is_100_OK"] == False].sort_values("_fail_count", ascending=False)
+        
+        # Select the most important columns to display to keep the table clean
+        cols_to_show = [COL_SITE, COL_CLUSTER, "Failure_Reasons", "_fail_count", COL_DG_TYPE, COL_DG_STAT, COL_BB, COL_RM]
+        # Only show columns that actually exist in the dataframe
+        cols_to_show = [c for c in cols_to_show if c in worst_df.columns]
+        
+        st.dataframe(
+            worst_df[cols_to_show].style.map(lambda x: 'background-color: rgba(255, 75, 75, 0.15)', subset=['Failure_Reasons']),
+            use_container_width=True,
+            hide_index=True
+        )
     else:
-        st.success("No failures to display.")
+        st.success("No action required. All sites are 100% OK.")
 
-with chart_col2:
-    st.subheader("Failures by Cluster")
-    if failed_sites > 0 and "Cluster" in df.columns:
-        cluster_fails = df[df['Is_100_OK'] == False]["Cluster"].value_counts()
-        st.bar_chart(cluster_fails, color="#ff9f36")
+# ==========================================================
+# TAB 3 — KPI DEEP DIVE
+# ==========================================================
+with tab_kpi:
+    st.subheader("🔍 Site Search & Raw Data")
+    
+    search_query = st.text_input("Search by Site ID, Town, or Status:")
+    
+    if search_query:
+        # Search across all columns as strings
+        mask = fdf.astype(str).apply(lambda x: x.str.contains(search_query, case=False, na=False)).any(axis=1)
+        search_result = fdf[mask]
+        st.write(f"Found {len(search_result)} matching sites:")
+        
+        st.dataframe(
+            search_result.drop(columns=["_fail_count"]), 
+            use_container_width=True, 
+            hide_index=True
+        )
     else:
-        st.info("No cluster failures.")
-
-st.markdown("### 📋 Actionable Site List (Filtered to Failures)")
-failed_df_view = df[df['Is_100_OK'] == False].copy()
-
-st.dataframe(
-    failed_df_view.style.map(lambda x: 'background-color: rgba(255, 75, 75, 0.1)', subset=['Failure_Reasons']),
-    use_container_width=True,
-    hide_index=True
-)
+        st.write("Full dataset overview:")
+        st.dataframe(
+            fdf.drop(columns=["_fail_count"]).head(100), 
+            use_container_width=True, 
+            hide_index=True
+        )
