@@ -1,5 +1,5 @@
 # ==========================================================
-# app.py — AIR V8: Enterprise Layout with Top-Bar Filters
+# app.py — AIR V9: App Routing, Floating Filters & Deep Downloads
 # ==========================================================
 
 import os, sys, subprocess
@@ -31,14 +31,11 @@ st.markdown("""
 <style>
     .stApp { background-color: #e0e5ec; }
     
-    /* 3D Floating Animation */
     @keyframes float {
         0% { transform: translateY(0px); }
         50% { transform: translateY(-4px); }
         100% { transform: translateY(0px); }
     }
-    
-    /* Pulsating Alert Animation */
     @keyframes pulse {
         0% { opacity: 1; }
         50% { opacity: 0.65; }
@@ -48,42 +45,45 @@ st.markdown("""
     .card-3d {
         background: #e0e5ec;
         border-radius: 15px;
-        padding: 20px;
+        padding: 15px;
         box-shadow: 9px 9px 16px rgb(163,177,198,0.6), -9px -9px 16px rgba(255,255,255, 0.5);
-        margin-bottom: 20px;
+        margin-bottom: 15px;
         text-align: center;
         transition: all 0.3s ease;
         animation: float 5s ease-in-out infinite;
     }
-    
     .card-3d:hover { 
         transform: translateY(-8px) scale(1.02); 
         box-shadow: 15px 15px 25px rgb(163,177,198,0.7), -15px -15px 25px rgba(255,255,255, 0.6);
         animation: none;
     }
     
-    .filter-bar {
-        background: #e0e5ec;
-        border-radius: 10px;
-        padding: 15px 20px 5px 20px;
-        box-shadow: inset 5px 5px 10px rgb(163,177,198,0.5), inset -5px -5px 10px rgba(255,255,255, 0.5);
-        margin-bottom: 20px;
-    }
-    
     .card-title { color: #5c6b73; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;}
-    .card-value { font-size: 2.2rem; font-weight: 800; color: #2b2d42; }
+    .card-value { font-size: 2.2rem; font-weight: 800; color: #2b2d42; margin-bottom: 5px;}
     .val-alert { color: #d90429; animation: pulse 2.5s infinite; }
     .val-success { color: #2a9d8f; }
     
     .stDataFrame { border-radius: 10px; box-shadow: 5px 5px 10px rgb(163,177,198,0.4); }
+    
+    /* Small routing button styling under cards */
+    div[data-testid="stButton"] button {
+        border-radius: 8px;
+        font-weight: 600;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================================
-# SESSION STATE
+# SESSION STATE & ROUTING ENGINE
 # ==========================================================
 if 'dynamic_rules' not in st.session_state:
     st.session_state.dynamic_rules = []
+
+if 'nav_selection' not in st.session_state:
+    st.session_state.nav_selection = "🏠 Home Summary"
+
+def navigate_to(page_name):
+    st.session_state.nav_selection = page_name
 
 # ==========================================================
 # CORE DATA ENGINE (CACHED)
@@ -154,17 +154,18 @@ def apply_rules(_df, rules):
     return df, active_fails, active_criticals
 
 # ==========================================================
-# LEFT SIDEBAR: NAVIGATION & SETUP (Moved to Top)
+# LEFT SIDEBAR: NAVIGATION & SETUP
 # ==========================================================
 with st.sidebar:
     st.markdown("### 📡 Main Menu")
     
-    # NAVIGATION AT THE VERY TOP
     pages = ["🏠 Home Summary", "⚙️ Logic Setup Studio"]
     critical_dashboards = [r['name'] for r in st.session_state.dynamic_rules if r.get('make_dash', False)]
     for d in critical_dashboards:
         pages.append(f"📊 {d} Deep Dive")
-    selection = st.radio("Go to:", pages)
+        
+    # Bind the radio button to the session state
+    st.radio("Go to:", pages, key="nav_selection")
     
     st.markdown("---")
     st.markdown("### 📂 Data & Config")
@@ -184,7 +185,7 @@ if not uploaded_file:
     st.stop()
 
 # ==========================================================
-# MAIN PAGE: TOP-BAR GLOBAL FILTERS
+# MAIN PAGE: FLOATING GLOBAL FILTERS
 # ==========================================================
 raw_df = load_data(uploaded_file)
 cols = raw_df.columns.tolist()
@@ -196,27 +197,26 @@ town_col = "Town" if "Town" in cols else "None"
 cluster_col = "Cluster" if "Cluster" in cols else "None"
 toco_col = "Site- Principal Owner" if "Site- Principal Owner" in cols else "None"
 
-st.markdown("<div class='filter-bar'>", unsafe_allow_html=True)
-st.markdown("**🌍 Global Drill-Downs**")
-fc1, fc2, fc3, fc4, fc5, fc6 = st.columns(6)
-
-f_geo = fc1.selectbox("Circle", ["All"] + sorted(raw_df[geo_col].unique())) if geo_col != "None" else "All"
-temp_df = raw_df if f_geo == "All" else raw_df[raw_df[geo_col] == f_geo]
-
-f_toco = fc2.selectbox("Toco", ["All"] + sorted(temp_df[toco_col].unique())) if toco_col != "None" else "All"
-if f_toco != "All": temp_df = temp_df[temp_df[toco_col] == f_toco]
-
-f_macro = fc3.selectbox("Macro/ULS", ["All"] + sorted(temp_df[macro_col].unique())) if macro_col != "None" else "All"
-if f_macro != "All": temp_df = temp_df[temp_df[macro_col] == f_macro]
-
-f_dist = fc4.selectbox("District", ["All"] + sorted(temp_df[dist_col].unique())) if dist_col != "None" else "All"
-if f_dist != "All": temp_df = temp_df[temp_df[dist_col] == f_dist]
-
-f_town = fc5.selectbox("Town", ["All"] + sorted(temp_df[town_col].unique())) if town_col != "None" else "All"
-if f_town != "All": temp_df = temp_df[temp_df[town_col] == f_town]
-
-f_cluster = fc6.selectbox("Cluster", ["All"] + sorted(temp_df[cluster_col].unique())) if cluster_col != "None" else "All"
-st.markdown("</div>", unsafe_allow_html=True)
+# FLOATING EXPANDER FOR FILTERS
+with st.expander("🌍 Click Here to Open Global Drill-Down Filters", expanded=False):
+    fc1, fc2, fc3 = st.columns(3)
+    f_geo = fc1.selectbox("Circle", ["All"] + sorted(raw_df[geo_col].unique())) if geo_col != "None" else "All"
+    temp_df = raw_df if f_geo == "All" else raw_df[raw_df[geo_col] == f_geo]
+    
+    f_toco = fc2.selectbox("Toco", ["All"] + sorted(temp_df[toco_col].unique())) if toco_col != "None" else "All"
+    if f_toco != "All": temp_df = temp_df[temp_df[toco_col] == f_toco]
+    
+    f_macro = fc3.selectbox("Macro/ULS", ["All"] + sorted(temp_df[macro_col].unique())) if macro_col != "None" else "All"
+    if f_macro != "All": temp_df = temp_df[temp_df[macro_col] == f_macro]
+    
+    fc4, fc5, fc6 = st.columns(3)
+    f_dist = fc4.selectbox("District", ["All"] + sorted(temp_df[dist_col].unique())) if dist_col != "None" else "All"
+    if f_dist != "All": temp_df = temp_df[temp_df[dist_col] == f_dist]
+    
+    f_town = fc5.selectbox("Town", ["All"] + sorted(temp_df[town_col].unique())) if town_col != "None" else "All"
+    if f_town != "All": temp_df = temp_df[temp_df[town_col] == f_town]
+    
+    f_cluster = fc6.selectbox("Cluster", ["All"] + sorted(temp_df[cluster_col].unique())) if cluster_col != "None" else "All"
 
 # Process Data Post-Filtering
 processed_df, fails, crits = apply_rules(raw_df, st.session_state.dynamic_rules)
@@ -232,13 +232,11 @@ if f_cluster != "All": final_df = final_df[final_df[cluster_col] == f_cluster]
 total_sites = len(final_df)
 
 # ==========================================================
-# PAGE ROUTING (Based on selection)
+# PAGE ROUTING (Based on session state selection)
 # ==========================================================
-if selection == "⚙️ Logic Setup Studio":
+if st.session_state.nav_selection == "⚙️ Logic Setup Studio":
     st.title("⚙️ Logic Setup Studio")
-    
     with st.container():
-        st.markdown("<div class='filter-bar'>", unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         with col1:
             kpi_name = st.text_input("KPI Name (e.g., DG Automation)")
@@ -277,7 +275,6 @@ if selection == "⚙️ Logic Setup Studio":
                 "make_dash": make_dash
             })
             st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
 
     if st.session_state.dynamic_rules:
         st.subheader("Active KPI Intelligence")
@@ -288,7 +285,7 @@ if selection == "⚙️ Logic Setup Studio":
                 st.rerun()
             st.markdown("---")
 
-elif selection == "🏠 Home Summary":
+elif st.session_state.nav_selection == "🏠 Home Summary":
     ok_count = final_df["_IS_OK"].sum() if total_sites > 0 else 0
     fail_count = total_sites - ok_count
     health_pct = (ok_count / total_sites * 100) if total_sites > 0 else 0
@@ -310,7 +307,14 @@ elif selection == "🏠 Home Summary":
         for i, fail_col in enumerate(fails):
             rule_name = fail_col.replace("FAIL_", "")
             fail_cnt = final_df[fail_col].sum() if fail_col in final_df.columns else 0
-            kpi_cols[i % 4].markdown(f"<div class='card-3d'><div class='card-title'>{rule_name}</div><div class='card-value val-alert' style='font-size: 1.8rem;'>{fail_cnt:,}</div></div>", unsafe_allow_html=True)
+            
+            with kpi_cols[i % 4]:
+                st.markdown(f"<div class='card-3d'><div class='card-title'>{rule_name}</div><div class='card-value val-alert' style='font-size: 1.8rem;'>{fail_cnt:,}</div></div>", unsafe_allow_html=True)
+                
+                # Check if a dashboard exists for this KPI to enable click-through
+                has_dash = any(r['name'] == rule_name and r.get('make_dash') for r in st.session_state.dynamic_rules)
+                if has_dash:
+                    st.button(f"🔍 View {rule_name}", key=f"nav_{rule_name}", on_click=navigate_to, args=(f"📊 {rule_name} Deep Dive",), use_container_width=True)
             
         st.markdown("---")
         c1, c2 = st.columns([7, 3])
@@ -344,15 +348,22 @@ elif selection == "🏠 Home Summary":
         st.info("Head to the Logic Setup Studio to define KPIs.")
 
 else:
-    kpi_name = selection.replace("📊 ", "").replace(" Deep Dive", "")
-    st.title(f"🔍 {kpi_name} Analysis")
+    # Dedicated KPI Deep Dive View
+    kpi_name = st.session_state.nav_selection.replace("📊 ", "").replace(" Deep Dive", "")
+    
+    col_title, col_back = st.columns([8, 2])
+    with col_title: st.title(f"🔍 {kpi_name} Analysis")
+    with col_back: 
+        st.write("") # Padding
+        st.button("🔙 Back to Home", on_click=navigate_to, args=("🏠 Home Summary",), type="primary")
     
     fail_col = f"FAIL_{kpi_name}"
     crit_col = f"CRIT_{kpi_name}"
     
     kpi_df = final_df[final_df[fail_col] == True]
     total_kpi_fails = len(kpi_df)
-    kpi_severe_count = len(kpi_df[kpi_df["_TOTAL_FAILS"] >= 3])
+    kpi_severe_df = kpi_df[kpi_df["_TOTAL_FAILS"] >= 3]
+    kpi_severe_count = len(kpi_severe_df)
     kpi_specific_crit = kpi_df[crit_col].sum() if crit_col in kpi_df.columns else 0
     
     st.markdown(f"""
@@ -389,8 +400,15 @@ else:
         st.subheader(f"Actionable Data: {kpi_name}")
         clean_cols = [c for c in kpi_df.columns if not c.startswith("FAIL_") and not c.startswith("CRIT_") and not c.startswith("_")]
         
-        col_btn, _ = st.columns([2, 8])
-        csv_export = kpi_df[clean_cols].to_csv(index=False).encode('utf-8')
-        col_btn.download_button(f"📥 Download Actions", data=csv_export, file_name=f"{kpi_name}_actionable.csv")
+        col_btn1, col_btn2, _ = st.columns([3, 3, 4])
+        
+        # Download 1: All Actionable Sites
+        csv_export_all = kpi_df[clean_cols].to_csv(index=False).encode('utf-8')
+        col_btn1.download_button(f"📥 Download All Actions", data=csv_export_all, file_name=f"{kpi_name}_actionable.csv")
+        
+        # Download 2: Severely Degraded Sites ONLY
+        if kpi_severe_count > 0:
+            csv_export_severe = kpi_severe_df[clean_cols].to_csv(index=False).encode('utf-8')
+            col_btn2.download_button(f"🚨 Download Severe Sites ONLY (≥3 Fails)", data=csv_export_severe, file_name=f"{kpi_name}_SEVERE.csv")
         
         st.dataframe(kpi_df[clean_cols].head(1000), use_container_width=True)
