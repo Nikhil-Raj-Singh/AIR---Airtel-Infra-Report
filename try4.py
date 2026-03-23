@@ -2,18 +2,19 @@ import sys
 import os
 import subprocess
 
-# --- 1. BULLETPROOF AUTO-LAUNCHER (MUST BE AT THE VERY TOP) ---
-# This intercepts the VS Code "Play" button immediately and boots Streamlit.
-if "streamlit" not in sys.argv[0]:
+# --- 1. BULLETPROOF AUTO-LAUNCHER (WITH INFINITE LOOP LOCK) ---
+# This checks for a secret environment variable. If it's not there, it sets it and launches Streamlit.
+if os.environ.get("STREAMLIT_AUTO_RUN") != "1":
     print("Initializing Dashboard Engine...")
+    os.environ["STREAMLIT_AUTO_RUN"] = "1" # Set the lock!
     try:
         script_path = os.path.abspath(__file__)
     except NameError:
         script_path = os.path.abspath(sys.argv[0])
         
-    # Safely launch Streamlit bypassing Windows path issues
+    # Safely launch Streamlit
     subprocess.run([sys.executable, "-m", "streamlit", "run", script_path])
-    sys.exit() # Stops the bare Python execution here
+    sys.exit() # Stop the bare Python execution
 
 # --- 2. STREAMLIT APP IMPORTS ---
 import streamlit as st
@@ -55,7 +56,7 @@ with st.sidebar:
             df = st.session_state['dummy_data']
             st.success("Sample Data Loaded!")
         else:
-            st.stop() # Halts app rendering until data exists
+            st.stop()
     else:
         try:
             if uploaded_file.name.endswith('.csv'):
