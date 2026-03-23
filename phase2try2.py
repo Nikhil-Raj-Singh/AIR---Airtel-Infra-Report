@@ -1,5 +1,5 @@
 # ==========================================================
-# app.py — AIR V7: 3D Animated BI Engine & Deep Analytics
+# app.py — AIR V8: Enterprise Layout with Top-Bar Filters
 # ==========================================================
 
 import os, sys, subprocess
@@ -59,7 +59,15 @@ st.markdown("""
     .card-3d:hover { 
         transform: translateY(-8px) scale(1.02); 
         box-shadow: 15px 15px 25px rgb(163,177,198,0.7), -15px -15px 25px rgba(255,255,255, 0.6);
-        animation: none; /* Pause float on hover */
+        animation: none;
+    }
+    
+    .filter-bar {
+        background: #e0e5ec;
+        border-radius: 10px;
+        padding: 15px 20px 5px 20px;
+        box-shadow: inset 5px 5px 10px rgb(163,177,198,0.5), inset -5px -5px 10px rgba(255,255,255, 0.5);
+        margin-bottom: 20px;
     }
     
     .card-title { color: #5c6b73; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;}
@@ -146,65 +154,71 @@ def apply_rules(_df, rules):
     return df, active_fails, active_criticals
 
 # ==========================================================
-# SIDEBAR: DATA LOAD, CONFIG & GLOBAL FILTERS
+# LEFT SIDEBAR: NAVIGATION & SETUP (Moved to Top)
 # ==========================================================
 with st.sidebar:
-    st.markdown("### 📡 Central BI Command")
-    uploaded_file = st.file_uploader("Upload Master Dataset", type=["xlsx", "xls", "csv"])
+    st.markdown("### 📡 Main Menu")
+    
+    # NAVIGATION AT THE VERY TOP
+    pages = ["🏠 Home Summary", "⚙️ Logic Setup Studio"]
+    critical_dashboards = [r['name'] for r in st.session_state.dynamic_rules if r.get('make_dash', False)]
+    for d in critical_dashboards:
+        pages.append(f"📊 {d} Deep Dive")
+    selection = st.radio("Go to:", pages)
+    
+    st.markdown("---")
+    st.markdown("### 📂 Data & Config")
+    uploaded_file = st.file_uploader("1. Upload Master Dataset", type=["xlsx", "xls", "csv"])
 
     if st.session_state.dynamic_rules:
-        with st.expander("💾 Config Management"):
+        with st.expander("💾 Config Management", expanded=False):
             config_json = json.dumps(st.session_state.dynamic_rules)
             st.download_button("Export Config", data=config_json, file_name="air_config.json", mime="application/json")
             
-    uploaded_config = st.sidebar.file_uploader("Import Config", type=["json"])
+    uploaded_config = st.file_uploader("2. Import Config (Optional)", type=["json"])
     if uploaded_config is not None:
         st.session_state.dynamic_rules = json.load(uploaded_config)
 
 if not uploaded_file:
-    st.info("👈 Upload your Site Data to begin building your intelligence platform.")
+    st.info("👈 Please upload your Site Data in the left sidebar to initialize the platform.")
     st.stop()
 
+# ==========================================================
+# MAIN PAGE: TOP-BAR GLOBAL FILTERS
+# ==========================================================
 raw_df = load_data(uploaded_file)
 cols = raw_df.columns.tolist()
 
-with st.sidebar:
-    st.markdown("---")
-    st.markdown("### 🌍 Global Drill-Downs")
-    
-    geo_col = "Auto_Circle" if "Auto_Circle" in cols else "None"
-    macro_col = "Macro/ULS" if "Macro/ULS" in cols else "None"
-    dist_col = "District" if "District" in cols else "None"
-    town_col = "Town" if "Town" in cols else "None"
-    cluster_col = "Cluster" if "Cluster" in cols else "None"
-    toco_col = "Site- Principal Owner" if "Site- Principal Owner" in cols else "None"
-    
-    f_geo = st.selectbox("Circle", ["All"] + sorted(raw_df[geo_col].unique())) if geo_col != "None" else "All"
-    temp_df = raw_df if f_geo == "All" else raw_df[raw_df[geo_col] == f_geo]
-    
-    f_toco = st.selectbox("Principal Owner (Toco)", ["All"] + sorted(temp_df[toco_col].unique())) if toco_col != "None" else "All"
-    if f_toco != "All": temp_df = temp_df[temp_df[toco_col] == f_toco]
-    
-    f_macro = st.selectbox("Macro/ULS", ["All"] + sorted(temp_df[macro_col].unique())) if macro_col != "None" else "All"
-    if f_macro != "All": temp_df = temp_df[temp_df[macro_col] == f_macro]
-    
-    f_dist = st.selectbox("District", ["All"] + sorted(temp_df[dist_col].unique())) if dist_col != "None" else "All"
-    if f_dist != "All": temp_df = temp_df[temp_df[dist_col] == f_dist]
-    
-    f_town = st.selectbox("Town", ["All"] + sorted(temp_df[town_col].unique())) if town_col != "None" else "All"
-    if f_town != "All": temp_df = temp_df[temp_df[town_col] == f_town]
-    
-    f_cluster = st.selectbox("Cluster", ["All"] + sorted(temp_df[cluster_col].unique())) if cluster_col != "None" else "All"
+geo_col = "Auto_Circle" if "Auto_Circle" in cols else "None"
+macro_col = "Macro/ULS" if "Macro/ULS" in cols else "None"
+dist_col = "District" if "District" in cols else "None"
+town_col = "Town" if "Town" in cols else "None"
+cluster_col = "Cluster" if "Cluster" in cols else "None"
+toco_col = "Site- Principal Owner" if "Site- Principal Owner" in cols else "None"
 
-# Display Active Mapping (Shows Column Names)
-with st.sidebar.expander("🗺️ Current Filter Mapping"):
-    st.write(f"**Circle** (`{geo_col}`): {f_geo}")
-    st.write(f"**Toco** (`{toco_col}`): {f_toco}")
-    st.write(f"**Macro/ULS** (`{macro_col}`): {f_macro}")
-    st.write(f"**District** (`{dist_col}`): {f_dist}")
-    st.write(f"**Town** (`{town_col}`): {f_town}")
-    st.write(f"**Cluster** (`{cluster_col}`): {f_cluster}")
+st.markdown("<div class='filter-bar'>", unsafe_allow_html=True)
+st.markdown("**🌍 Global Drill-Downs**")
+fc1, fc2, fc3, fc4, fc5, fc6 = st.columns(6)
 
+f_geo = fc1.selectbox("Circle", ["All"] + sorted(raw_df[geo_col].unique())) if geo_col != "None" else "All"
+temp_df = raw_df if f_geo == "All" else raw_df[raw_df[geo_col] == f_geo]
+
+f_toco = fc2.selectbox("Toco", ["All"] + sorted(temp_df[toco_col].unique())) if toco_col != "None" else "All"
+if f_toco != "All": temp_df = temp_df[temp_df[toco_col] == f_toco]
+
+f_macro = fc3.selectbox("Macro/ULS", ["All"] + sorted(temp_df[macro_col].unique())) if macro_col != "None" else "All"
+if f_macro != "All": temp_df = temp_df[temp_df[macro_col] == f_macro]
+
+f_dist = fc4.selectbox("District", ["All"] + sorted(temp_df[dist_col].unique())) if dist_col != "None" else "All"
+if f_dist != "All": temp_df = temp_df[temp_df[dist_col] == f_dist]
+
+f_town = fc5.selectbox("Town", ["All"] + sorted(temp_df[town_col].unique())) if town_col != "None" else "All"
+if f_town != "All": temp_df = temp_df[temp_df[town_col] == f_town]
+
+f_cluster = fc6.selectbox("Cluster", ["All"] + sorted(temp_df[cluster_col].unique())) if cluster_col != "None" else "All"
+st.markdown("</div>", unsafe_allow_html=True)
+
+# Process Data Post-Filtering
 processed_df, fails, crits = apply_rules(raw_df, st.session_state.dynamic_rules)
 
 final_df = processed_df.copy()
@@ -218,28 +232,17 @@ if f_cluster != "All": final_df = final_df[final_df[cluster_col] == f_cluster]
 total_sites = len(final_df)
 
 # ==========================================================
-# ROUTING & NAVIGATION
-# ==========================================================
-with st.sidebar:
-    st.markdown("---")
-    st.markdown("### 🧭 Navigation")
-    pages = ["🏠 Home Summary", "⚙️ Logic Setup Studio"]
-    critical_dashboards = [r['name'] for r in st.session_state.dynamic_rules if r.get('make_dash', False)]
-    for d in critical_dashboards:
-        pages.append(f"📊 {d} Deep Dive")
-    selection = st.radio("Go to:", pages)
-
-# ==========================================================
-# PAGE 1: LOGIC SETUP STUDIO
+# PAGE ROUTING (Based on selection)
 # ==========================================================
 if selection == "⚙️ Logic Setup Studio":
     st.title("⚙️ Logic Setup Studio")
     
-    with st.expander("➕ Create New KPI Rule", expanded=True):
+    with st.container():
+        st.markdown("<div class='filter-bar'>", unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         with col1:
             kpi_name = st.text_input("KPI Name (e.g., DG Automation)")
-            use_pre = st.checkbox("1. Requires Pre-condition? (e.g., Only DG sites)")
+            use_pre = st.checkbox("1. Requires Pre-condition?")
             p_col = st.selectbox("Pre-Condition Column", cols) if use_pre else None
             p_op = st.selectbox("Operator", ["==", "!=", "Contains"]) if use_pre else None
             p_val = st.text_input("Value") if use_pre else None
@@ -260,10 +263,10 @@ if selection == "⚙️ Logic Setup Studio":
             use_sev = st.checkbox("4. Define KPI-Specific Critical Level?")
             s_col = st.selectbox("Severity Column", cols) if use_sev else None
             s_op = st.selectbox("Severity Op", ["<", ">", "==", "<=", ">="]) if use_sev else None
-            s_val = st.text_input("Severity Threshold (e.g., Backup < 2)") if use_sev else None
+            s_val = st.text_input("Severity Threshold") if use_sev else None
             
             st.markdown("---")
-            make_dash = st.checkbox("🔥 Create Dedicated Dashboard for this KPI?", value=True)
+            make_dash = st.checkbox("🔥 Create Dedicated Dashboard?", value=True)
 
         if st.button("Save KPI Logic", type="primary"):
             st.session_state.dynamic_rules.append({
@@ -274,23 +277,18 @@ if selection == "⚙️ Logic Setup Studio":
                 "make_dash": make_dash
             })
             st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
     if st.session_state.dynamic_rules:
         st.subheader("Active KPI Intelligence")
         for i, rule in enumerate(st.session_state.dynamic_rules):
-            with st.container():
-                st.markdown(f"**{rule['name']}**")
-                if st.button(f"Delete {rule['name']}", key=f"del_{i}"):
-                    st.session_state.dynamic_rules.pop(i)
-                    st.rerun()
-                st.markdown("---")
+            st.markdown(f"**{rule['name']}**")
+            if st.button(f"Delete {rule['name']}", key=f"del_{i}"):
+                st.session_state.dynamic_rules.pop(i)
+                st.rerun()
+            st.markdown("---")
 
-# ==========================================================
-# PAGE 2: HOME SUMMARY
-# ==========================================================
 elif selection == "🏠 Home Summary":
-    st.title("Global Network Summary")
-    
     ok_count = final_df["_IS_OK"].sum() if total_sites > 0 else 0
     fail_count = total_sites - ok_count
     health_pct = (ok_count / total_sites * 100) if total_sites > 0 else 0
@@ -302,7 +300,7 @@ elif selection == "🏠 Home Summary":
         <div class="card-3d" style="flex:1; min-width: 150px;"><div class="card-title">Network Health</div><div class="card-value val-success">{health_pct:.1f}%</div></div>
         <div class="card-3d" style="flex:1; min-width: 150px;"><div class="card-title">Sites 100% OK</div><div class="card-value val-success">{ok_count:,}</div></div>
         <div class="card-3d" style="flex:1; min-width: 150px;"><div class="card-title">Deficient Sites</div><div class="card-value val-alert">{fail_count:,}</div></div>
-        <div class="card-3d" style="flex:1; min-width: 150px;"><div class="card-title">Critically Severed (≥3 Fails)</div><div class="card-value val-alert">{severe_count:,}</div></div>
+        <div class="card-3d" style="flex:1; min-width: 150px;"><div class="card-title">Severely Degraded (≥3 Fails)</div><div class="card-value val-alert">{severe_count:,}</div></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -328,7 +326,6 @@ elif selection == "🏠 Home Summary":
         view_col = cluster_col if view_toggle == "Cluster-wise Insights" else toco_col
         
         if view_col != "None" and not melted_df.empty:
-            # Aggregate to apply "Top X" logic globally across the chosen dimension
             grouped = melted_df.groupby(view_col).size().reset_index(name='Total_Errors')
             grouped = grouped.sort_values('Total_Errors', ascending=False)
             
@@ -346,9 +343,6 @@ elif selection == "🏠 Home Summary":
     else:
         st.info("Head to the Logic Setup Studio to define KPIs.")
 
-# ==========================================================
-# PAGE 3: DYNAMIC KPI DEEP DIVES
-# ==========================================================
 else:
     kpi_name = selection.replace("📊 ", "").replace(" Deep Dive", "")
     st.title(f"🔍 {kpi_name} Analysis")
@@ -358,10 +352,7 @@ else:
     
     kpi_df = final_df[final_df[fail_col] == True]
     total_kpi_fails = len(kpi_df)
-    
-    # Check specifically for sites failing THIS KPI *and* having >=3 total failures network-wide
     kpi_severe_count = len(kpi_df[kpi_df["_TOTAL_FAILS"] >= 3])
-    
     kpi_specific_crit = kpi_df[crit_col].sum() if crit_col in kpi_df.columns else 0
     
     st.markdown(f"""
