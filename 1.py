@@ -465,3 +465,42 @@ elif st.session_state.current_page == "Data Export":
                     file_name=f"stacked_sites_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv"
                 )
+
+
+
+            if pl_dfs:
+                # Instant vertical stacking via Polars
+                df_stacked = pl.concat(pl_dfs, how="vertical_relaxed")
+                csv_bytes = df_stacked.write_csv()
+                
+                col_dl1, col_dl2 = st.columns(2)
+                
+                with col_dl1:
+                    st.download_button(
+                        label="📥 Download Stacked CSV",
+                        data=csv_bytes,
+                        file_name=f"stacked_sites_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+                    
+                with col_dl2:
+                    st.info(f"✅ {df_stacked.height:,} total rows | {len(selected_indices)} month(s)")
+
+                st.markdown("---")
+                st.markdown("### Preview of Stacked Data")
+                # Convert the small 10-row preview back to pandas for guaranteed Streamlit rendering compatibility
+                st.dataframe(df_stacked.head(10).to_pandas(), use_container_width=True)
+    else:
+        st.info("📭 No datasets available.")
+
+# ==========================================================
+# FOOTER
+# ==========================================================
+st.markdown("---")
+st.markdown("""
+<div style="text-align: center; color: #888; font-size: 0.85rem; margin-top: 30px;">
+    <strong>Trend Dashboard v2.0</strong> | Powered by Streamlit & Airtel Data Intelligence<br>
+    Following AIR Central BI v2.0 Architecture
+</div>
+""", unsafe_allow_html=True)
+
