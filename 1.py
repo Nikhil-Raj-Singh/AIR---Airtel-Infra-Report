@@ -413,6 +413,86 @@ elif st.session_state.current_page == "Trend Analysis":
         if selected_circle != "All": df_filtered = df_filtered[df_filtered['Circle'].astype(str) == selected_circle]
         if selected_mib != "All": df_filtered = df_filtered[df_filtered['MIB Name'].astype(str) == selected_mib]
 
+        # ===== MONTH-ON-MONTH COMPARISON (First Section) =====
+        st.markdown("---")
+        st.markdown("### 📊 Month-on-Month Average Comparison (Filtered)")
+        st.markdown(f"*Comparing all energy sources for {selected_circle} - {selected_mib}*")
+
+        try:
+            # Get unique months in the filtered data
+            months_list = sorted(df_filtered['Source_Month'].unique().tolist())
+
+            if len(months_list) > 1:
+                # Build comparison table
+                comparison_rows = []
+                for month in months_list:
+                    month_data = df_filtered[df_filtered['Source_Month'] == month]
+                    comparison_rows.append({
+                        'Month': month,
+                        'EB Avg (h)': pd.to_numeric(month_data['EB_Run_Avg'], errors='coerce').mean() if 'EB_Run_Avg' in month_data.columns else 0,
+                        'DG Avg (h)': pd.to_numeric(month_data['DG_Run_Avg'], errors='coerce').mean() if 'DG_Run_Avg' in month_data.columns else 0,
+                        'BB Avg (h)': pd.to_numeric(month_data['BB_Run_Avg'], errors='coerce').mean() if 'BB_Run_Avg' in month_data.columns else 0,
+                        'Solar Avg (h)': pd.to_numeric(month_data['Solar_Run_Avg'], errors='coerce').mean() if 'Solar_Run_Avg' in month_data.columns else 0,
+                    })
+
+                df_comparison = pd.DataFrame(comparison_rows)
+
+                # Show visualizations EXACTLY like the main dashboard
+                col_c1, col_c2 = st.columns(2)
+
+                with col_c1:
+                    fig_trend = px.line(
+                        df_comparison,
+                        x='Month',
+                        y=['EB Avg (h)', 'DG Avg (h)', 'BB Avg (h)', 'Solar Avg (h)'],
+                        title=f"Energy Source Trends ({selected_circle})",
+                        markers=True,
+                        line_shape='linear',
+                        labels={'value': 'Average Run Hours', 'variable': 'Energy Source'}
+                    )
+                    fig_trend.update_layout(height=350, hovermode='x unified')
+                    st.plotly_chart(fig_trend, use_container_width=True)
+
+                with col_c2:
+                    fig_bar = px.bar(
+                        df_comparison,
+                        x='Month',
+                        y=['EB Avg (h)', 'DG Avg (h)', 'BB Avg (h)', 'Solar Avg (h)'],
+                        title=f"Monthly Comparison - Stacked ({selected_circle})",
+                        barmode='group',
+                        labels={'value': 'Average Run Hours', 'variable': 'Energy Source'}
+                    )
+                    fig_bar.update_layout(height=350)
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                # Display metrics in the exact same 5-column layout
+                for idx, row in df_comparison.iterrows():
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    with col1: st.metric(f"Month", row['Month'], help=row['Month'])
+                    with col2: st.metric("EB Run Avg", f"{row['EB Avg (h)']:.2f}h", help="Electricity Board")
+                    with col3: st.metric("DG Run Avg", f"{row['DG Avg (h)']:.2f}h", help="Diesel Generator")
+                    with col4: st.metric("BB Run Avg", f"{row['BB Avg (h)']:.2f}h", help="Battery Backup")
+                    with col5: st.metric("Solar Avg", f"{row['Solar Avg (h)']:.2f}h", help="Solar Energy")
+                    st.divider()
+
+            elif len(months_list) == 1:
+                # Single month fallback (matches dashboard TrendMetricCards exactly)
+                col1, col2, col3, col4, col5 = st.columns(5)
+                avg_eb = pd.to_numeric(df_filtered['EB_Run_Avg'], errors='coerce').mean() if 'EB_Run_Avg' in df_filtered.columns else 0
+                avg_dg = pd.to_numeric(df_filtered['DG_Run_Avg'], errors='coerce').mean() if 'DG_Run_Avg' in df_filtered.columns else 0
+                avg_solar = pd.to_numeric(df_filtered['Solar_Run_Avg'], errors='coerce').mean() if 'Solar_Run_Avg' in df_filtered.columns else 0
+                
+                with col3: TrendMetricCard.render("Avg EB", f"{avg_eb:.2f}h", "Filtered Sites", "default")
+                with col4: TrendMetricCard.render("Avg DG", f"{avg_dg:.2f}h", "Filtered Sites", "default")
+                with col5: TrendMetricCard.render("Avg Solar", f"{avg_solar:.2f}h", "Filtered Sites", "default")
+                
+        except Exception as e:
+            st.warning(f"Could not generate month comparison: {str(e)}")
+
+        # Calculate share by metric
+        st.markdown("---")
+
+
         st.markdown("---")
         st.markdown("### 💾 Download Filtered Report")
         
